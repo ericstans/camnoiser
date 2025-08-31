@@ -3,85 +3,28 @@
 
 // Import CSS file
 import './style.css';
+import { Controls } from './ui/controls.js';
 
 const app = document.getElementById('app');
 
 // Display webcam input in the #app div
-
-
 const video = document.createElement('video');
 video.autoplay = true;
 video.className = 'responsive-video';
 app.appendChild(video);
 
-// Controls container
-
-const controlsDiv = document.createElement('div');
-controlsDiv.className = 'controls';
+// Create and setup UI controls
+const controls = new Controls();
+const controlsDiv = controls.createControls();
 app.appendChild(controlsDiv);
 
+// Get references to control elements
+const modeSelect = controls.getModeSelect();
+const startBtn = controls.getStartButton();
 
-// Add Mode picklist
-const modeLabel = document.createElement('label');
-modeLabel.textContent = 'Mode: ';
-const modeSelect = document.createElement('select');
-
-const modeOption1 = document.createElement('option');
-modeOption1.value = 'avg-brightness';
-modeOption1.textContent = 'Avg Brightness to Pitch';
-modeSelect.appendChild(modeOption1);
-
-const modeOption2 = document.createElement('option');
-modeOption2.value = 'white-noise-filtering';
-modeOption2.textContent = 'White Noise Filtering';
-modeSelect.appendChild(modeOption2);
-
-const modeOption3 = document.createElement('option');
-modeOption3.value = 'frame-audio-buffer';
-modeOption3.textContent = 'Frame as Audio Buffer';
-modeSelect.appendChild(modeOption3);
-
-const modeOption4 = document.createElement('option');
-modeOption4.value = 'rows-audio-buffers';
-modeOption4.textContent = 'Rows as Audio Buffers';
-modeSelect.appendChild(modeOption4);
-
-
-
-modeLabel.appendChild(modeSelect);
-controlsDiv.appendChild(modeLabel);
-controlsDiv.appendChild(modeSelect);
-
-const modeOption5 = document.createElement('option');
-modeOption5.value = 'red-channel-buffer';
-modeOption5.textContent = 'Red Channel Only';
-modeSelect.appendChild(modeOption5);
-
-const modeOption6 = document.createElement('option');
-modeOption6.value = 'frame-buffer-loop';
-modeOption6.textContent = 'Frame Buffer Loop';
-modeSelect.appendChild(modeOption6);
-
-const modeOption7 = document.createElement('option');
-modeOption7.value = 'center-region-buffer';
-modeOption7.textContent = 'Center Region Only';
-modeSelect.appendChild(modeOption7);
-
-const modeOption8 = document.createElement('option');
-modeOption8.value = 'multi-frame-blend';
-modeOption8.textContent = 'Multi-frame Blend';
-modeSelect.appendChild(modeOption8);
 // For multi-frame blend mode
 const blendFrameCount = 5;
 let blendFrames = [];
-
-
-// Add Start Audio button
-
-
-const startBtn = document.createElement('button');
-startBtn.textContent = 'Start Audio';
-controlsDiv.appendChild(startBtn);
 
 // Create a hidden canvas for frame analysis
 const canvas = document.createElement('canvas');
