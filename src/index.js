@@ -1,16 +1,29 @@
  
+
+
+// Import CSS file
+import './style.css';
+
 const app = document.getElementById('app');
 
 // Display webcam input in the #app div
+
+
 const video = document.createElement('video');
 video.autoplay = true;
-video.style.width = '640px';
-video.style.height = '480px';
+video.className = 'responsive-video';
 app.appendChild(video);
+
+// Controls container
+
+const controlsDiv = document.createElement('div');
+controlsDiv.className = 'controls';
+app.appendChild(controlsDiv);
+
+
 // Add Mode picklist
 const modeLabel = document.createElement('label');
 modeLabel.textContent = 'Mode: ';
-modeLabel.style.marginRight = '8px';
 const modeSelect = document.createElement('select');
 
 const modeOption1 = document.createElement('option');
@@ -33,8 +46,11 @@ modeOption4.value = 'rows-audio-buffers';
 modeOption4.textContent = 'Rows as Audio Buffers';
 modeSelect.appendChild(modeOption4);
 
+
+
 modeLabel.appendChild(modeSelect);
-app.appendChild(modeLabel);
+controlsDiv.appendChild(modeLabel);
+controlsDiv.appendChild(modeSelect);
 
 const modeOption5 = document.createElement('option');
 modeOption5.value = 'red-channel-buffer';
@@ -61,11 +77,11 @@ let blendFrames = [];
 
 
 // Add Start Audio button
+
+
 const startBtn = document.createElement('button');
 startBtn.textContent = 'Start Audio';
-startBtn.style.display = 'block';
-startBtn.style.margin = '16px 0';
-app.appendChild(startBtn);
+controlsDiv.appendChild(startBtn);
 
 // Create a hidden canvas for frame analysis
 const canvas = document.createElement('canvas');
