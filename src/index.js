@@ -1,4 +1,4 @@
-
+ 
 const app = document.getElementById('app');
 
 // Display webcam input in the #app div

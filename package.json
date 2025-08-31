@@ -1,7 +1,7 @@
 {
-  "name": "Webpack template",
+  "name": "Camnoiser",
   "version": "1.0.0",
-  "description": "Template for quickly starting HTML+JS projects targeting Github Pages.",
+  "description": "Generate noise with webcam input",
   "main": "src/index.js",
   "scripts": {
     "start": "webpack serve --mode development --open",
