@@ -2,11 +2,14 @@
 // Handles creation and management of all UI control elements
 
 export class Controls {
-    constructor() {
+    constructor(audioManager, sonificationModes) {
         this.controlsDiv = null;
         this.modeSelect = null;
         this.startBtn = null;
         this.modeLabel = null;
+        this.audioStarted = false;
+        this.audioManager = audioManager;
+        this.sonificationModes = sonificationModes;
     }
 
     createControls() {
@@ -73,5 +76,33 @@ export class Controls {
 
     getControlsDiv() {
         return this.controlsDiv;
+    }
+
+    // Setup event listeners for the controls
+    setupEventListeners() {
+        if (this.startBtn && this.audioManager && this.sonificationModes) {
+            this.startBtn.addEventListener('click', () => {
+                if (!this.audioStarted) {
+                    // Start audio
+                    this.audioManager.resumeAudioContext();
+                    this.startBtn.textContent = 'Stop Audio';
+                    this.audioStarted = true;
+                } else {
+                    // Stop audio
+                    // Don't call stopNoise() as it permanently stops the white noise source
+                    // Just mute the gains instead
+                    // Stop all sonification
+                    this.sonificationModes.stopAllBuffers();
+                    // Mute the main oscillator and gain
+                    this.audioManager.getGain().gain.value = 0;
+                    // Mute all band gains
+                    this.audioManager.getBandGains().forEach(bandGain => {
+                        bandGain.gain.value = 0;
+                    });
+                    this.startBtn.textContent = 'Start Audio';
+                    this.audioStarted = false;
+                }
+            });
+        }
     }
 }

@@ -24,11 +24,6 @@ class CamNoiserApp {
             const video = this.videoManager.createVideoElement();
             this.app.appendChild(video);
 
-            // Initialize UI controls
-            this.controls = new Controls();
-            const controlsDiv = this.controls.createControls();
-            this.app.appendChild(controlsDiv);
-
             // Create canvas for frame analysis
             const canvas = this.videoManager.createCanvas();
             const ctx = this.videoManager.getCanvasContext();
@@ -39,8 +34,13 @@ class CamNoiserApp {
             // Initialize sonification modes
             this.sonificationModes = new SonificationModes(this.audioManager, canvas, ctx);
 
+            // Initialize UI controls (after audio and sonification are ready)
+            this.controls = new Controls(this.audioManager, this.sonificationModes);
+            const controlsDiv = this.controls.createControls();
+            this.app.appendChild(controlsDiv);
+
             // Setup event listeners
-            this.setupEventListeners();
+            this.controls.setupEventListeners();
 
             // Initialize webcam and start application
             await this.initializeWebcam();
@@ -53,15 +53,7 @@ class CamNoiserApp {
         }
     }
 
-    // Setup all event listeners
-    setupEventListeners() {
-        const startBtn = this.controls.getStartButton();
-        startBtn.addEventListener('click', () => {
-            this.audioManager.resumeAudioContext();
-            startBtn.disabled = true;
-            startBtn.textContent = 'Audio Started';
-        });
-    }
+
 
     // Initialize webcam and start video processing
     async initializeWebcam() {
@@ -84,8 +76,8 @@ class CamNoiserApp {
             // Get current frame data from video manager
             const data = this.videoManager.getCurrentFrameData();
             
-            if (data) {
-                // Process frame using the selected sonification mode
+            if (data && this.controls.audioStarted) {
+                // Only process frame if audio has been started by user
                 this.sonificationModes.processFrame(data, modeSelect.value);
             }
             
