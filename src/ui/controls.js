@@ -43,7 +43,13 @@ export class Controls {
             { value: 'red-channel-buffer', text: 'Red Channel Only' },
             { value: 'frame-buffer-loop', text: 'Frame Buffer Loop' },
             { value: 'center-region-buffer', text: 'Center Region Only' },
-            { value: 'multi-frame-blend', text: 'Multi-frame Blend' }
+            { value: 'multi-frame-blend', text: 'Multi-frame Blend' },
+            { value: 'harmonic-series', text: 'Harmonic Series' },
+            { value: 'granular', text: 'Granular Synthesis' },
+            { value: 'spectral', text: 'Spectral Analysis' },
+            { value: 'midi-like', text: 'MIDI-like Musical' },
+            { value: 'particle-system', text: 'Particle System' },
+            { value: 'cross-modal', text: 'Cross-Modal Mapping' }
         ];
 
         // Create and append all mode options
