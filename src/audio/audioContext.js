@@ -113,12 +113,24 @@ export class AudioManager {
     }
 
     startNoise() {
-        if (!this.noiseStarted && this.noiseSource) {
+        if (!this.noiseStarted) {
+            // If noise source was stopped, recreate it
+            if (!this.noiseSource) {
+                this.setupNoiseSystem();
+            }
+            
             try {
                 this.noiseSource.start();
                 this.noiseStarted = true;
             } catch (e) {
-                // Ignore errors if already started
+                // If start fails, recreate the source and try again
+                this.setupNoiseSystem();
+                try {
+                    this.noiseSource.start();
+                    this.noiseStarted = true;
+                } catch (e2) {
+                    console.warn('Failed to start noise source:', e2);
+                }
             }
         }
     }
@@ -129,5 +141,18 @@ export class AudioManager {
 
     createBufferSource() {
         return this.audioCtx.createBufferSource();
+    }
+
+    // Reset the noise system (useful when switching back to white noise filtering mode)
+    resetNoiseSystem() {
+        if (this.noiseSource) {
+            try {
+                this.noiseSource.stop();
+            } catch (e) {
+                // Ignore errors if already stopped
+            }
+        }
+        this.noiseStarted = false;
+        this.setupNoiseSystem();
     }
 }

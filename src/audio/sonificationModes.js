@@ -53,12 +53,13 @@ export class SonificationModes {
         this.oscillator.frequency.value = freq;
         this.gain.gain.value = 0.1;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        this.audioManager.stopNoise();
+        // Don't stop noise - just mute the band gains instead
     }
 
     // Mode 2: White Noise Filtering
     whiteNoiseFilteringMode(data) {
         this.stopAllBuffers();
+        // Start noise if not already running
         this.audioManager.startNoise();
         this.gain.gain.value = 0;
         for (let x = 0; x < this.canvas.width; x++) {
@@ -76,7 +77,7 @@ export class SonificationModes {
     frameAudioBufferMode(data) {
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        this.audioManager.stopNoise();
+        // Don't stop noise - just mute the band gains instead
         this.stopRowBufferPlayback();
         
         const numSamples = this.canvas.width * this.canvas.height;
@@ -99,7 +100,7 @@ export class SonificationModes {
     rowsAudioBuffersMode(data) {
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        this.audioManager.stopNoise();
+        // Don't stop noise - just mute the band gains instead
         this.stopFrameBufferPlayback();
         this.stopRowBufferPlayback();
         
@@ -124,7 +125,7 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        this.audioManager.stopNoise();
+        // Don't stop noise - just mute the band gains instead
         
         const numSamples = this.canvas.width * this.canvas.height;
         const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
@@ -147,7 +148,7 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        this.audioManager.stopNoise();
+        // Don't stop noise - just mute the band gains instead
         
         const numSamples = this.canvas.width * this.canvas.height;
         const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
@@ -172,7 +173,7 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        this.audioManager.stopNoise();
+        // Don't stop noise - just mute the band gains instead
         
         // Use only the center region (e.g., 1/4 of the frame)
         const regionW = Math.floor(this.canvas.width / 2);
@@ -204,7 +205,7 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        this.audioManager.stopNoise();
+        // Don't stop noise - just mute the band gains instead
         
         // Keep a buffer of the last N frames
         if (this.blendFrames.length >= this.blendFrameCount) this.blendFrames.shift();
