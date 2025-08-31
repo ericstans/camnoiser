@@ -1,85 +1,127 @@
- 
-
-
 // Import CSS file
 import './style.css';
 import { Controls } from './ui/controls.js';
 import { AudioManager } from './audio/audioContext.js';
 import { SonificationModes } from './audio/sonificationModes.js';
+import { VideoManager } from './video/webcam.js';
 
-const app = document.getElementById('app');
+// Main Application Class
+class CamNoiserApp {
+    constructor() {
+        this.app = document.getElementById('app');
+        this.videoManager = null;
+        this.controls = null;
+        this.audioManager = null;
+        this.sonificationModes = null;
+        this.isInitialized = false;
+    }
 
-// Display webcam input in the #app div
-const video = document.createElement('video');
-video.autoplay = true;
-video.className = 'responsive-video';
-app.appendChild(video);
+    // Initialize all application components
+    async initialize() {
+        try {
+            // Initialize video manager
+            this.videoManager = new VideoManager();
+            const video = this.videoManager.createVideoElement();
+            this.app.appendChild(video);
 
-// Create and setup UI controls
-const controls = new Controls();
-const controlsDiv = controls.createControls();
-app.appendChild(controlsDiv);
+            // Initialize UI controls
+            this.controls = new Controls();
+            const controlsDiv = this.controls.createControls();
+            this.app.appendChild(controlsDiv);
 
-// Get references to control elements
-const modeSelect = controls.getModeSelect();
-const startBtn = controls.getStartButton();
+            // Create canvas for frame analysis
+            const canvas = this.videoManager.createCanvas();
+            const ctx = this.videoManager.getCanvasContext();
 
+            // Initialize audio manager
+            this.audioManager = new AudioManager(canvas.width);
 
+            // Initialize sonification modes
+            this.sonificationModes = new SonificationModes(this.audioManager, canvas, ctx);
 
-// Create a hidden canvas for frame analysis
-const canvas = document.createElement('canvas');
-canvas.width = 160; // smaller for performance
-canvas.height = 120;
-canvas.style.display = 'none';
-document.body.appendChild(canvas);
-const ctx = canvas.getContext('2d');
+            // Setup event listeners
+            this.setupEventListeners();
 
+            // Initialize webcam and start application
+            await this.initializeWebcam();
 
-// Initialize audio manager
-const audioManager = new AudioManager(canvas.width);
-const audioCtx = audioManager.getAudioContext();
-const oscillator = audioManager.getOscillator();
-const gain = audioManager.getGain();
-const noiseSource = audioManager.getNoiseSource();
-const bandGains = audioManager.getBandGains();
+            this.isInitialized = true;
+            console.log('CamNoiser application initialized successfully');
+        } catch (error) {
+            console.error('Failed to initialize application:', error);
+            this.showError(`Failed to initialize application: ${error.message}`);
+        }
+    }
 
-// Resume audio context on button click
-startBtn.addEventListener('click', () => {
-	audioManager.resumeAudioContext();
-	startBtn.disabled = true;
-	startBtn.textContent = 'Audio Started';
-});
+    // Setup all event listeners
+    setupEventListeners() {
+        const startBtn = this.controls.getStartButton();
+        startBtn.addEventListener('click', () => {
+            this.audioManager.resumeAudioContext();
+            startBtn.disabled = true;
+            startBtn.textContent = 'Audio Started';
+        });
+    }
 
-// Request webcam access
-if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-	navigator.mediaDevices.getUserMedia({ video: true })
-		.then(function(stream) {
-			video.srcObject = stream;
-			video.onplay = () => {
-				// Start sonification loop
-				requestAnimationFrame(sonifyFrame);
-			};
-		})
-		.catch(function(err) {
-			app.innerHTML = '<p>Could not access webcam: ' + err.message + '</p>';
-		});
-} else {
-	app.innerHTML = '<p>getUserMedia is not supported in this browser.</p>';
+    // Initialize webcam and start video processing
+    async initializeWebcam() {
+        try {
+            await this.videoManager.requestWebcamAccess();
+            await this.videoManager.startVideo(() => {
+                // Start sonification loop when video starts playing
+                this.startSonificationLoop();
+            });
+        } catch (error) {
+            throw new Error(`Webcam initialization failed: ${error.message}`);
+        }
+    }
+
+    // Start the main sonification loop
+    startSonificationLoop() {
+        const modeSelect = this.controls.getModeSelect();
+        
+        const sonifyFrame = () => {
+            // Get current frame data from video manager
+            const data = this.videoManager.getCurrentFrameData();
+            
+            if (data) {
+                // Process frame using the selected sonification mode
+                this.sonificationModes.processFrame(data, modeSelect.value);
+            }
+            
+            // Continue the animation loop
+            requestAnimationFrame(sonifyFrame);
+        };
+
+        // Start the loop
+        requestAnimationFrame(sonifyFrame);
+    }
+
+    // Show error message to user
+    showError(message) {
+        this.app.innerHTML = `<div class="error-message"><p>Error: ${message}</p></div>`;
+    }
+
+    // Cleanup resources when needed
+    cleanup() {
+        if (this.videoManager) {
+            this.videoManager.stopWebcam();
+        }
+        // Add other cleanup as needed
+    }
 }
 
+// Initialize the application when DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+    const app = new CamNoiserApp();
+    app.initialize().catch(error => {
+        console.error('Application failed to start:', error);
+    });
 
-// Initialize sonification modes
-const sonificationModes = new SonificationModes(audioManager, canvas, ctx);
+    // Handle page unload
+    window.addEventListener('beforeunload', () => {
+        app.cleanup();
+    });
+}); 
 
-function sonifyFrame() {
-	// Draw current video frame to canvas
-	ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-	const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-	const data = frame.data;
 
-	// Process frame using the selected sonification mode
-	sonificationModes.processFrame(data, modeSelect.value);
-	
-	// Continue the animation loop
-	requestAnimationFrame(sonifyFrame);
-}
