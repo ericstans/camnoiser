@@ -1,6 +1,5 @@
-// Sonification Modes Module
-// Contains all the different sonification algorithms
-
+const NOTE_ATTACK_TIME = 2;
+const NOTE_RELEASE_TIME = 2;
 export class SonificationModes {
     constructor(audioManager, canvas, ctx) {
         this.audioManager = audioManager;
@@ -67,11 +66,12 @@ export class SonificationModes {
         }
         
         // Clean up MIDI oscillators
-        if (this.midiOscillators) {
-            this.midiOscillators.forEach(osc => {
-                try { osc.stop(); } catch (e) {}
+        if (this.midiNoteStates) {
+            this.midiNoteStates.forEach(noteState => {
+                if (noteState.isPlaying) {
+                    this.stopNote(noteState);
+                }
             });
-            this.midiOscillators = [];
         }
         
         // Clean up particle system
@@ -479,53 +479,120 @@ export class SonificationModes {
 
     // Mode 12: MIDI-like Mode
     midiMode(data) {
-        this.stopAllBuffers();
-        this.gain.gain.value = 0;
-        for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        
-        // Musical scale (C major)
-        const scale = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25];
-        
-        // Stop any existing MIDI oscillators
-        if (this.midiOscillators) {
-            this.midiOscillators.forEach(osc => {
-                try { osc.stop(); } catch (e) {}
-            });
+        // Initialize note tracking on first call
+        if (!this.midiNoteStates) {
+            this.midiNoteStates = new Array(8).fill(null).map(() => ({
+                isPlaying: false,
+                oscillator: null,
+                gain: null,
+                lastBrightness: 0,
+                triggerThreshold: 20, // Brightness change needed to trigger note
+                sustainThreshold: 80   // Brightness below this will release the note
+            }));
         }
         
-        this.midiOscillators = [];
+        // Musical scale (C major - proper frequencies)
+        // C4 = 261.63 Hz (base)
+        // D4 = C4 * 9/8 = 294.33 Hz
+        // E4 = C4 * 5/4 = 327.04 Hz  
+        // F4 = C4 * 4/3 = 348.84 Hz
+        // G4 = C4 * 3/2 = 392.45 Hz
+        // A4 = C4 * 5/3 = 436.05 Hz
+        // B4 = C4 * 15/8 = 490.56 Hz
+        // C5 = C4 * 2 = 523.26 Hz
+        const scale = [261.63, 294.33, 327.04, 348.84, 392.45, 436.05, 490.56, 523.26];
         
-        // Create musical notes based on video data
+        // Process each note position
         const numNotes = 8;
+        let notesPlaying = 0;
+        
         for (let i = 0; i < numNotes; i++) {
             const x = Math.floor((i / numNotes) * this.canvas.width);
             const y = Math.floor(this.canvas.height / 2);
             const idx = (y * this.canvas.width + x) * 4;
             
             const brightness = (data[idx] + data[idx+1] + data[idx+2]) / 3;
+            const noteState = this.midiNoteStates[i];
+            const brightnessChange = Math.abs(brightness - noteState.lastBrightness);
             
-            if (brightness > 100) { // Only play notes for bright areas
-                const osc = this.audioCtx.createOscillator();
-                const gain = this.audioCtx.createGain();
+            // Check if we should trigger a new note
+            if (brightness > 100 && brightnessChange > noteState.triggerThreshold) {
+                // Stop existing note if playing
+                if (noteState.isPlaying) {
+                    this.stopNote(noteState);
+                }
                 
-                osc.type = 'triangle';
-                osc.frequency.value = scale[i % scale.length];
-                
-                // Brightness affects volume
-                gain.gain.value = (brightness / 255) * 0.2;
-                
-                // Add envelope
-                gain.gain.setValueAtTime(0, this.audioCtx.currentTime);
-                gain.gain.linearRampToValueAtTime(gain.gain.value, this.audioCtx.currentTime + 0.1);
-                gain.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 1.0);
-                
-                osc.connect(gain).connect(this.audioCtx.destination);
-                osc.start();
-                osc.stop(this.audioCtx.currentTime + 1.0);
-                
-                this.midiOscillators.push(osc);
+                // Create new note with smooth envelope
+                this.createNote(noteState, scale[i % scale.length], brightness, i);
+                notesPlaying++;
             }
+            
+            // Check if we should release a sustained note
+            if (noteState.isPlaying && brightness < noteState.sustainThreshold) {
+                console.log(`Releasing note ${i}: brightness ${brightness} < threshold ${noteState.sustainThreshold}`);
+                this.stopNote(noteState);
+            }
+            
+            // Update last brightness for next frame
+            noteState.lastBrightness = brightness;
         }
+        
+        // Log only when notes change
+        if (notesPlaying > 0) {
+            console.log(`Playing ${notesPlaying} musical notes`);
+        }
+    }
+    
+    
+    // Helper method to create a note with smooth envelope
+    createNote(noteState, frequency, brightness, noteIndex) {
+        const osc = this.audioCtx.createOscillator();
+        const gain = this.audioCtx.createGain();
+        
+        osc.type = 'triangle';
+        osc.frequency.value = frequency;
+        
+        // Calculate note volume based on brightness
+        const noteGain = Math.max(0.1, (brightness / 255) * 0.4);
+        
+        // Smooth envelope: fade in, then sustain indefinitely
+        const now = this.audioCtx.currentTime;
+        const attackTime = 0.5;    // 500ms fade in
+        
+        // Start at 0, fade in to full volume
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(noteGain, now + attackTime);
+        
+        // Sustain indefinitely (no automatic stop)
+        osc.connect(gain).connect(this.audioCtx.destination);
+        osc.start(now);
+        
+        // Store note state
+        noteState.oscillator = osc;
+        noteState.gain = gain;
+        noteState.isPlaying = true;
+        
+        console.log(`Note ${noteIndex}: ${frequency.toFixed(1)}Hz, brightness=${brightness}, gain=${noteGain.toFixed(3)} - SUSTAINING`);
+    }
+    
+    // Helper method to stop a note
+    stopNote(noteState) {
+        if (noteState.gain) {
+            // Smooth fade out
+            const now = this.audioCtx.currentTime;
+            noteState.gain.gain.linearRampToValueAtTime(0, now + NOTE_RELEASE_TIME);
+            
+            // Stop oscillator after fade
+            setTimeout(() => {
+                if (noteState.oscillator) {
+                    try { noteState.oscillator.stop(); } catch (e) {}
+                }
+            }, 100);
+        }
+        
+        noteState.isPlaying = false;
+        noteState.oscillator = null;
+        noteState.gain = null;
     }
 
     // Mode 13: Particle System Mode

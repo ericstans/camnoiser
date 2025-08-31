@@ -1,7 +1,10 @@
 // Video/Webcam Module
 // Handles video element setup, webcam access, and canvas management
+const CANVAS_WIDTH = 320;
+const CANVAS_HEIGHT = 240;
 
 export class VideoManager {
+    
     constructor() {
         this.video = null;
         this.canvas = null;
@@ -18,8 +21,8 @@ export class VideoManager {
 
     createCanvas() {
         this.canvas = document.createElement('canvas');
-        this.canvas.width = 160; // smaller for performance
-        this.canvas.height = 120;
+        this.canvas.width = CANVAS_WIDTH;
+        this.canvas.height = CANVAS_HEIGHT;
         this.canvas.style.display = 'none';
         document.body.appendChild(this.canvas);
         this.ctx = this.canvas.getContext('2d');
