@@ -6,10 +6,12 @@ export class AudioManager {
         this.audioCtx = null;
         this.oscillator = null;
         this.gain = null;
+        this.stereoPanner = null;
         this.noiseBuffer = null;
         this.noiseSource = null;
         this.bandFilters = [];
         this.bandGains = [];
+        this.bandPanners = [];
         this.noiseStarted = false;
         this.numBands = canvasWidth;
         this.minFreq = 50;
@@ -29,10 +31,14 @@ export class AudioManager {
         // For mode 1: avg-brightness
         this.oscillator = this.audioCtx.createOscillator();
         this.gain = this.audioCtx.createGain();
+        this.stereoPanner = this.audioCtx.createStereoPanner();
+        
         this.oscillator.type = 'sine';
         this.oscillator.frequency.value = 440; // default
         this.gain.gain.value = 0.1; // low volume
-        this.oscillator.connect(this.gain).connect(this.audioCtx.destination);
+        this.stereoPanner.pan.value = 0; // center
+        
+        this.oscillator.connect(this.gain).connect(this.stereoPanner).connect(this.audioCtx.destination);
         this.oscillator.start();
     }
 
@@ -61,9 +67,14 @@ export class AudioManager {
             const bandGain = this.audioCtx.createGain();
             bandGain.gain.value = 0;
             
-            this.noiseSource.connect(filter).connect(bandGain).connect(this.audioCtx.destination);
+            // Create individual panner for each band
+            const bandPanner = this.audioCtx.createStereoPanner();
+            bandPanner.pan.value = 0; // center by default
+            
+            this.noiseSource.connect(filter).connect(bandGain).connect(bandPanner).connect(this.audioCtx.destination);
             this.bandFilters.push(filter);
             this.bandGains.push(bandGain);
+            this.bandPanners.push(bandPanner);
         }
     }
 
@@ -85,12 +96,20 @@ export class AudioManager {
         return this.gain;
     }
 
+    getStereoPanner() {
+        return this.stereoPanner;
+    }
+
     getNoiseSource() {
         return this.noiseSource;
     }
 
     getBandGains() {
         return this.bandGains;
+    }
+
+    getBandPanners() {
+        return this.bandPanners;
     }
 
     isNoiseStarted() {

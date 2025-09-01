@@ -7,6 +7,8 @@ export class Controls {
         this.modeSelect = null;
         this.startBtn = null;
         this.modeLabel = null;
+        this.panSlider = null;
+        this.panLabel = null;
         this.audioStarted = false;
         this.audioManager = audioManager;
         this.sonificationModes = sonificationModes;
@@ -19,6 +21,9 @@ export class Controls {
 
         // Create mode selection
         this.createModeSelection();
+        
+        // Create panning slider
+        this.createPanningSlider();
         
         // Create start button
         this.createStartButton();
@@ -69,6 +74,55 @@ export class Controls {
         this.controlsDiv.appendChild(this.modeSelect);
     }
 
+    createPanningSlider() {
+        // Create panning label
+        this.panLabel = document.createElement('label');
+        this.panLabel.textContent = 'Pan: ';
+        this.panLabel.setAttribute('for', 'pan-slider');
+
+        // Create panning slider
+        this.panSlider = document.createElement('input');
+        this.panSlider.type = 'range';
+        this.panSlider.id = 'pan-slider';
+        this.panSlider.min = '-1';
+        this.panSlider.max = '1';
+        this.panSlider.step = '0.1';
+        this.panSlider.value = '0';
+        this.panSlider.className = 'pan-slider';
+
+        // Create value display
+        const panValue = document.createElement('span');
+        panValue.textContent = '0.0';
+        panValue.className = 'pan-value';
+
+        // Update value display when slider changes
+        this.panSlider.addEventListener('input', () => {
+            const panValue_num = parseFloat(this.panSlider.value);
+            panValue.textContent = panValue_num.toFixed(1);
+            
+            // Update main oscillator panning
+            if (this.audioManager && this.audioManager.getStereoPanner) {
+                const panner = this.audioManager.getStereoPanner();
+                if (panner) {
+                    panner.pan.value = panValue_num;
+                }
+            }
+            
+            // Update band panners for white noise filtering mode
+            if (this.audioManager && this.audioManager.getBandPanners) {
+                const bandPanners = this.audioManager.getBandPanners();
+                bandPanners.forEach(bandPanner => {
+                    bandPanner.pan.value = panValue_num;
+                });
+            }
+        });
+
+        // Append panning controls to main controls
+        this.controlsDiv.appendChild(this.panLabel);
+        this.controlsDiv.appendChild(this.panSlider);
+        this.controlsDiv.appendChild(panValue);
+    }
+
     createStartButton() {
         this.startBtn = document.createElement('button');
         this.startBtn.textContent = 'Start Audio';
@@ -85,6 +139,10 @@ export class Controls {
 
     getControlsDiv() {
         return this.controlsDiv;
+    }
+
+    getPanSlider() {
+        return this.panSlider;
     }
 
     // Setup event listeners for the controls

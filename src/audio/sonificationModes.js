@@ -8,7 +8,9 @@ export class SonificationModes {
         this.audioCtx = audioManager.getAudioContext();
         this.oscillator = audioManager.getOscillator();
         this.gain = audioManager.getGain();
+        this.stereoPanner = audioManager.getStereoPanner();
         this.bandGains = audioManager.getBandGains();
+        this.bandPanners = audioManager.getBandPanners();
 
         // For multi-frame blend mode
         this.blendFrameCount = 5;
@@ -148,8 +150,10 @@ export class SonificationModes {
 
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
+        const panner = this.audioCtx.createStereoPanner();
+        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
+        src.connect(panner).connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -171,8 +175,10 @@ export class SonificationModes {
                 rowData[x] = ((data[idx] + data[idx + 1] + data[idx + 2]) / 3) / 127.5 - 1;
             }
             const src = this.audioCtx.createBufferSource();
+            const panner = this.audioCtx.createStereoPanner();
+            panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
             src.buffer = rowBuffer;
-            src.connect(this.audioCtx.destination);
+            src.connect(panner).connect(this.audioCtx.destination);
             src.start(this.audioCtx.currentTime + y * 0.001);
             this.lastRowBufferSources.push(src);
         }
@@ -195,8 +201,10 @@ export class SonificationModes {
 
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
+        const panner = this.audioCtx.createStereoPanner();
+        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
+        src.connect(panner).connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -218,9 +226,11 @@ export class SonificationModes {
 
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
+        const panner = this.audioCtx.createStereoPanner();
+        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
         src.loop = true;
-        src.connect(this.audioCtx.destination);
+        src.connect(panner).connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         // Let it loop for 0.5s, then stop
@@ -323,14 +333,16 @@ export class SonificationModes {
         for (let i = 1; i <= numHarmonics; i++) {
             const osc = this.audioCtx.createOscillator();
             const gain = this.audioCtx.createGain();
+            const panner = this.audioCtx.createStereoPanner();
 
             osc.type = 'sine';
             osc.frequency.value = baseFreq * i;
 
             // Higher harmonics get quieter
             gain.gain.value = 0.1 / i;
+            panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
 
-            osc.connect(gain).connect(this.audioCtx.destination);
+            osc.connect(gain).connect(panner).connect(this.audioCtx.destination);
             osc.start();
 
             this.harmonicOscillators.push(osc);
