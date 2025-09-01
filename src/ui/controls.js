@@ -50,6 +50,8 @@ export class Controls {
             { value: 'center-region-buffer', text: 'Center Region Only' },
             { value: 'multi-frame-blend', text: 'Multi-frame Blend' },
             { value: 'chrominance-buffer', text: 'Chrominance as Audio Buffer' },
+            { value: 'chrominance-3frame-buffer', text: 'Chrominance 3-Frame Cycle' },
+            { value: 'chrominance-3frame-buffer-old', text: 'Chrominance 3-Frame Cycle (Old)' },
             { value: 'frame-diff-buffer', text: 'Frame Difference Buffer' },
             { value: 'edge-detect-buffer', text: 'Edge Detection Buffer' },
             { value: 'harmonic-series', text: 'Harmonic Series' },
@@ -114,6 +116,26 @@ export class Controls {
                 bandPanners.forEach(bandPanner => {
                     bandPanner.pan.value = panValue_num;
                 });
+            }
+        });
+
+        // Listen for mode changes to disable/enable panning slider
+        this.modeSelect.addEventListener('change', () => {
+            const selectedMode = this.modeSelect.value;
+            if (selectedMode === 'chrominance-3frame-buffer' || selectedMode === 'chrominance-3frame-buffer-old') {
+                // Disable panning slider for 3-frame modes
+                this.panSlider.disabled = true;
+                this.panSlider.value = '0';
+                panValue.textContent = '0.0';
+                this.panSlider.style.opacity = '0.5';
+                this.panLabel.style.opacity = '0.5';
+                panValue.style.opacity = '0.5';
+            } else {
+                // Enable panning slider for other modes
+                this.panSlider.disabled = false;
+                this.panSlider.style.opacity = '1';
+                this.panLabel.style.opacity = '1';
+                panValue.style.opacity = '1';
             }
         });
 
