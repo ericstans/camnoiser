@@ -262,8 +262,10 @@ export class SonificationModes {
 
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
+        const panner = this.audioCtx.createStereoPanner();
+        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
+        src.connect(panner).connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -294,8 +296,10 @@ export class SonificationModes {
 
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
+        const panner = this.audioCtx.createStereoPanner();
+        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
+        src.connect(panner).connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -409,8 +413,12 @@ export class SonificationModes {
             // Set grain gain based on brightness (ensure minimum volume)
             grainGain.gain.value = Math.max(0.1, (brightness / 255) * 0.5);
 
-            // Connect grain through gain to output
-            grain.connect(grainGain).connect(this.audioCtx.destination);
+            // Add panning to each grain
+            const grainPanner = this.audioCtx.createStereoPanner();
+            grainPanner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
+            
+            // Connect grain through gain and panner to output
+            grain.connect(grainGain).connect(grainPanner).connect(this.audioCtx.destination);
 
             // Position affects timing (ensure positive delay)
             const delay = Math.max(0, (x / this.canvas.width) * 0.1);
@@ -474,6 +482,7 @@ export class SonificationModes {
         for (let i = 0; i < fftSize; i++) {
             const osc = this.audioCtx.createOscillator();
             const gain = this.audioCtx.createGain();
+            const panner = this.audioCtx.createStereoPanner();
 
             osc.type = 'sine';
             // Map spectrum index to frequency (50Hz to 5000Hz)
@@ -481,8 +490,9 @@ export class SonificationModes {
 
             // Map brightness to gain
             gain.gain.value = (spectrum[i] / 255) * 0.1;
+            panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
 
-            osc.connect(gain).connect(this.audioCtx.destination);
+            osc.connect(gain).connect(panner).connect(this.audioCtx.destination);
             osc.start();
 
             this.spectralOscillators.push(osc);
@@ -575,8 +585,12 @@ export class SonificationModes {
         gain.gain.setValueAtTime(0, now);
         gain.gain.linearRampToValueAtTime(noteGain, now + attackTime);
 
+        // Add panning to the note
+        const panner = this.audioCtx.createStereoPanner();
+        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
+        
         // Sustain indefinitely (no automatic stop)
-        osc.connect(gain).connect(this.audioCtx.destination);
+        osc.connect(gain).connect(panner).connect(this.audioCtx.destination);
         osc.start(now);
 
         // Store note state
@@ -657,9 +671,12 @@ export class SonificationModes {
                 // Brightness affects volume
                 gain.gain.value = (brightness / 255) * 0.3;
 
-                // Add panning based on X position
+                // Add panning based on X position combined with global pan setting
                 const panner = this.audioCtx.createStereoPanner();
-                panner.pan.value = (x / this.canvas.width) * 2 - 1;
+                const localPan = (x / this.canvas.width) * 2 - 1;
+                const globalPan = this.stereoPanner.pan.value;
+                // Combine local and global panning (clamp to valid range)
+                panner.pan.value = Math.max(-1, Math.min(1, localPan + globalPan));
 
                 osc.connect(gain).connect(panner).connect(this.audioCtx.destination);
                 osc.start();
@@ -707,28 +724,34 @@ export class SonificationModes {
         // Red channel → Pitch (frequency)
         const pitchOsc = this.audioCtx.createOscillator();
         const pitchGain = this.audioCtx.createGain();
+        const pitchPanner = this.audioCtx.createStereoPanner();
         pitchOsc.type = 'sine';
         pitchOsc.frequency.value = 110 + (red / 255) * 880; // A2 to A5
         pitchGain.gain.value = 0.2;
-        pitchOsc.connect(pitchGain).connect(this.audioCtx.destination);
+        pitchPanner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
+        pitchOsc.connect(pitchGain).connect(pitchPanner).connect(this.audioCtx.destination);
         pitchOsc.start();
         this.crossModalOscillators.push(pitchOsc);
 
         // Green channel → Timbre (waveform)
         const timbreOsc = this.audioCtx.createOscillator();
         const timbreGain = this.audioCtx.createGain();
+        const timbrePanner = this.audioCtx.createStereoPanner();
         timbreOsc.type = green > 128 ? 'square' : 'sawtooth';
         timbreOsc.frequency.value = 220 + (green / 255) * 440; // A3 to A4
         timbreGain.gain.value = 0.15;
-        timbreOsc.connect(timbreGain).connect(this.audioCtx.destination);
+        timbrePanner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
+        timbreOsc.connect(timbreGain).connect(timbrePanner).connect(this.audioCtx.destination);
         timbreOsc.start();
         this.crossModalOscillators.push(timbreOsc);
 
         // Blue channel → Rhythm (pulse)
         const rhythmOsc = this.audioCtx.createOscillator();
         const rhythmGain = this.audioCtx.createGain();
+        const rhythmPanner = this.audioCtx.createStereoPanner();
         rhythmOsc.type = 'triangle';
         rhythmOsc.frequency.value = 330 + (blue / 255) * 330; // E4 to E5
+        rhythmPanner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
 
         // Create rhythmic pattern
         const rhythmPattern = [1, 0, 1, 0, 1, 0, 1, 0]; // 8-beat pattern
@@ -744,7 +767,7 @@ export class SonificationModes {
             beatIndex = (beatIndex + 1) % rhythmPattern.length;
         }, (60 / (blue / 255 * 120 + 60)) * 1000); // BPM based on blue value
 
-        rhythmOsc.connect(rhythmGain).connect(this.audioCtx.destination);
+        rhythmOsc.connect(rhythmGain).connect(rhythmPanner).connect(this.audioCtx.destination);
         rhythmOsc.start();
         this.crossModalOscillators.push(rhythmOsc);
 
@@ -765,8 +788,10 @@ export class SonificationModes {
         }
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
+        const panner = this.audioCtx.createStereoPanner();
+        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
+        src.connect(panner).connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -791,8 +816,10 @@ export class SonificationModes {
         this._prevFrameData = new Uint8ClampedArray(data);
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
+        const panner = this.audioCtx.createStereoPanner();
+        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
+        src.connect(panner).connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -833,8 +860,10 @@ export class SonificationModes {
         }
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
+        const panner = this.audioCtx.createStereoPanner();
+        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
+        src.connect(panner).connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
