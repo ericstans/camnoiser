@@ -12,6 +12,9 @@ export class Controls {
         this.audioStarted = false;
         this.audioManager = audioManager;
         this.sonificationModes = sonificationModes;
+        this.cameraSelect = null;
+        this.refreshBtn = null;
+        this.composeSelect = null;
     }
 
     createControls() {
@@ -19,9 +22,15 @@ export class Controls {
         this.controlsDiv = document.createElement('div');
         this.controlsDiv.className = 'controls';
 
-        // Create mode selection
+    // Create camera selection first (so users can pick devices early)
+    this.createCameraSelection();
+
+    // Create mode selection
         this.createModeSelection();
         
+    // Create compose mode selection
+    this.createComposeSelection();
+
         // Create panning slider
         this.createPanningSlider();
         
@@ -29,6 +38,28 @@ export class Controls {
         this.createStartButton();
 
         return this.controlsDiv;
+    }
+
+    createCameraSelection() {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'camera-controls';
+
+        const label = document.createElement('label');
+        label.textContent = 'Cameras: ';
+
+        this.cameraSelect = document.createElement('select');
+        this.cameraSelect.multiple = true;
+        this.cameraSelect.size = 3;
+        this.cameraSelect.style.minWidth = '220px';
+
+        this.refreshBtn = document.createElement('button');
+        this.refreshBtn.textContent = 'Refresh Cameras';
+        this.refreshBtn.type = 'button';
+
+        wrapper.appendChild(label);
+        wrapper.appendChild(this.cameraSelect);
+        wrapper.appendChild(this.refreshBtn);
+        this.controlsDiv.appendChild(wrapper);
     }
 
     createModeSelection() {
@@ -148,6 +179,29 @@ export class Controls {
         this.controlsDiv.appendChild(panValue);
     }
 
+    createComposeSelection() {
+        const label = document.createElement('label');
+        label.textContent = 'Compose: ';
+
+        this.composeSelect = document.createElement('select');
+        const options = [
+            { value: 'average', text: 'Average' },
+            { value: 'side-by-side', text: 'Side-by-side' },
+            { value: 'sum', text: 'Sum (Clamp)' },
+            { value: 'sum-normalize', text: 'Sum (Normalize)' },
+        ];
+        options.forEach(o => {
+            const opt = document.createElement('option');
+            opt.value = o.value;
+            opt.textContent = o.text;
+            this.composeSelect.appendChild(opt);
+        });
+        this.composeSelect.value = 'average';
+
+        this.controlsDiv.appendChild(label);
+        this.controlsDiv.appendChild(this.composeSelect);
+    }
+
     createStartButton() {
         this.startBtn = document.createElement('button');
         this.startBtn.textContent = 'Start Audio';
@@ -156,6 +210,54 @@ export class Controls {
 
     getModeSelect() {
         return this.modeSelect;
+    }
+
+    getSelectedCameraIds() {
+        if (!this.cameraSelect) return [];
+        return Array.from(this.cameraSelect.selectedOptions).map(o => o.value);
+    }
+
+    setCameraOptions(devices) {
+        if (!this.cameraSelect) return;
+        this.cameraSelect.innerHTML = '';
+        devices.forEach((d, idx) => {
+            const opt = document.createElement('option');
+            opt.value = d.deviceId;
+            opt.textContent = d.label || `Camera ${idx + 1}`;
+            this.cameraSelect.appendChild(opt);
+        });
+    }
+
+    onRefreshCameras(handler) {
+        if (this.refreshBtn) {
+            this.refreshBtn.addEventListener('click', handler);
+        }
+    }
+
+    onCameraSelectionChange(handler) {
+        if (this.cameraSelect) {
+            this.cameraSelect.addEventListener('change', () => {
+                handler(this.getSelectedCameraIds());
+            });
+        }
+    }
+
+    selectCameraIds(deviceIds) {
+        if (!this.cameraSelect) return;
+        const set = new Set(deviceIds);
+        Array.from(this.cameraSelect.options).forEach(opt => {
+            opt.selected = set.has(opt.value);
+        });
+    }
+
+    onComposeModeChange(handler) {
+        if (this.composeSelect) {
+            this.composeSelect.addEventListener('change', () => handler(this.composeSelect.value));
+        }
+    }
+
+    setComposeModeValue(value) {
+        if (this.composeSelect) this.composeSelect.value = value;
     }
 
     getStartButton() {

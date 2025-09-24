@@ -60,13 +60,16 @@ export class VideoManager {
         return this.canvas;
     }
 
-    async requestWebcamAccess() {
+    async requestWebcamAccess(deviceId = null, width = CANVAS_WIDTH, height = CANVAS_HEIGHT) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error('getUserMedia is not supported in this browser.');
         }
 
         try {
-            this.stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            const constraints = deviceId
+                ? { video: { deviceId: { exact: deviceId }, width, height } }
+                : { video: { width, height } };
+            this.stream = await navigator.mediaDevices.getUserMedia(constraints);
             this.video.srcObject = this.stream;
             return this.stream;
         } catch (err) {
@@ -95,6 +98,13 @@ export class VideoManager {
         return new Promise((resolve, reject) => {
             if (!this.video) {
                 reject(new Error('Video element not created'));
+                return;
+            }
+
+            // If already playing, resolve immediately
+            if (this.video.readyState >= 2 && !this.video.paused) {
+                if (onVideoStart) onVideoStart();
+                resolve();
                 return;
             }
 

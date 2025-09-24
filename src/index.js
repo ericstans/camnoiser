@@ -3,13 +3,13 @@ import './style.css';
 import { Controls } from './ui/controls.js';
 import { AudioManager } from './audio/audioContext.js';
 import { SonificationModes } from './audio/sonificationModes.js';
-import { VideoManager } from './video/webcam.js';
+import { MultiCameraManager } from './video/multiCamera.js';
 
 // Main Application Class
 class CamNoiserApp {
     constructor() {
         this.app = document.getElementById('app');
-        this.videoManager = null;
+    this.multiCamera = null;
         this.controls = null;
         this.audioManager = null;
         this.sonificationModes = null;
@@ -19,15 +19,14 @@ class CamNoiserApp {
     // Initialize all application components
     async initialize() {
         try {
-            // Initialize video manager
-            this.videoManager = new VideoManager();
-            const videoContainer = this.videoManager.createVideoElement();
-            // createVideoElement now returns a container that wraps the video
-            this.app.appendChild(videoContainer);
+            // Initialize multi-camera manager
+            this.multiCamera = new MultiCameraManager();
+            const videosContainer = this.multiCamera.createVideosContainer();
+            this.app.appendChild(videosContainer);
 
-            // Create canvas for frame analysis
-            const canvas = this.videoManager.createCanvas();
-            const ctx = this.videoManager.getCanvasContext();
+            // Create analysis canvas (shared composite)
+            const canvas = this.multiCamera.createAnalysisCanvas();
+            const ctx = this.multiCamera.getAnalysisCanvasContext();
 
             // Initialize audio manager
             this.audioManager = new AudioManager(canvas.width);
@@ -43,8 +42,20 @@ class CamNoiserApp {
             // Setup event listeners
             this.controls.setupEventListeners();
 
-            // Initialize webcam and start application
-            await this.initializeWebcam();
+            // Populate and wire camera selection
+            await this.populateCameras();
+            this.controls.onRefreshCameras(() => this.populateCameras());
+            this.controls.onCameraSelectionChange(async (ids) => {
+                try {
+                    await this.multiCamera.setSelectedDevices(ids);
+                } catch (e) {
+                    console.error('Failed to switch cameras:', e);
+                }
+            });
+            this.controls.onComposeModeChange((mode) => this.multiCamera.setComposeMode(mode));
+
+            // Request initial cameras (default: first available)
+            await this.initializeCameras();
 
             this.isInitialized = true;
             console.log('CamNoiser application initialized successfully');
@@ -56,16 +67,28 @@ class CamNoiserApp {
 
 
 
-    // Initialize webcam and start video processing
-    async initializeWebcam() {
+    async populateCameras() {
         try {
-            await this.videoManager.requestWebcamAccess();
-            await this.videoManager.startVideo(() => {
-                // Start sonification loop when video starts playing
-                this.startSonificationLoop();
-            });
+            const devices = await this.multiCamera.enumerateCameras();
+            this.controls.setCameraOptions(devices);
+        } catch (e) {
+            this.showError(`Could not enumerate cameras: ${e.message}`);
+        }
+    }
+
+    // Initialize selected cameras and start processing
+    async initializeCameras() {
+        try {
+            const devices = await this.multiCamera.enumerateCameras();
+            const defaultIds = devices.slice(0, 1).map(d => d.deviceId);
+            await this.multiCamera.setSelectedDevices(defaultIds);
+            this.controls.selectCameraIds(defaultIds);
+            this.multiCamera.setComposeMode('average');
+            this.controls.setComposeModeValue('average');
+            // Start sonification loop when first video starts playing
+            this.startSonificationLoop();
         } catch (error) {
-            throw new Error(`Webcam initialization failed: ${error.message}`);
+            throw new Error(`Camera initialization failed: ${error.message}`);
         }
     }
 
@@ -74,8 +97,8 @@ class CamNoiserApp {
         const modeSelect = this.controls.getModeSelect();
         
         const sonifyFrame = () => {
-            // Get current frame data from video manager
-            const data = this.videoManager.getCurrentFrameData();
+            // Get composite frame data from multi-camera
+            const data = this.multiCamera.getCompositeFrameData();
             
             if (data && this.controls.audioStarted) {
                 // Only process frame if audio has been started by user

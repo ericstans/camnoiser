@@ -93,6 +93,25 @@
   margin-bottom: 16px;
   justify-content: center;
 }
+/* Camera controls */
+.camera-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Multi-camera container */
+.videos-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.videos-container .video-container {
+  max-width: 100%;
+}
 label, select, button {
   font-size: 1rem;
   padding: 6px 10px;
