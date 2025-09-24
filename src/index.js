@@ -21,8 +21,9 @@ class CamNoiserApp {
         try {
             // Initialize video manager
             this.videoManager = new VideoManager();
-            const video = this.videoManager.createVideoElement();
-            this.app.appendChild(video);
+            const videoContainer = this.videoManager.createVideoElement();
+            // createVideoElement now returns a container that wraps the video
+            this.app.appendChild(videoContainer);
 
             // Create canvas for frame analysis
             const canvas = this.videoManager.createCanvas();

@@ -15,6 +15,76 @@
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
+
+/* Video container to hold overlays like fullscreen button */
+.video-container {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto 12px auto; /* center horizontally with bottom spacing */
+}
+
+.video-container .responsive-video {
+  margin: 0; /* container handles spacing */
+}
+
+/* Fullscreen toggle button */
+.fullscreen-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 2;
+}
+
+.fullscreen-btn:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.fullscreen-btn:focus {
+  outline: 2px solid #1976d2;
+  outline-offset: 2px;
+}
+
+.fullscreen-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+}
+
+/* Fullscreen behavior: container fills screen; video scales to fit (letterbox) */
+.video-container:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  margin: 0; /* remove centering margins in fullscreen */
+  background: #000; /* letterbox background */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.video-container:fullscreen .responsive-video {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: 100%;
+  object-fit: contain; /* preserve aspect ratio, no cropping */
+  aspect-ratio: auto; /* override non-fullscreen aspect ratio */
+  border-radius: 0;
+  box-shadow: none;
+}
 .controls {
   display: flex;
   flex-wrap: wrap;

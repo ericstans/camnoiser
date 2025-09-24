@@ -13,10 +13,41 @@ export class VideoManager {
     }
 
     createVideoElement() {
+        // Create container to hold video and overlays
+        const container = document.createElement('div');
+        container.className = 'video-container';
+
         this.video = document.createElement('video');
         this.video.autoplay = true;
         this.video.className = 'responsive-video';
-        return this.video;
+
+        // Fullscreen button
+        const fsBtn = document.createElement('button');
+        fsBtn.className = 'fullscreen-btn';
+        fsBtn.setAttribute('aria-label', 'Toggle Fullscreen');
+        fsBtn.title = 'Fullscreen';
+        // Simple unicode icon ⛶ (U+26F6) as fallback
+        fsBtn.innerHTML = '<span class="fullscreen-icon">⛶</span> Fullscreen';
+
+        // Fullscreen toggle handler
+        const toggleFullscreen = async () => {
+            try {
+                if (!document.fullscreenElement) {
+                    // Prefer making the container fullscreen for overlays to stay positioned
+                    if (container.requestFullscreen) await container.requestFullscreen();
+                } else {
+                    if (document.exitFullscreen) await document.exitFullscreen();
+                }
+            } catch (e) {
+                console.warn('Fullscreen toggle failed:', e);
+            }
+        };
+        fsBtn.addEventListener('click', toggleFullscreen);
+
+        // Assemble
+        container.appendChild(this.video);
+        container.appendChild(fsBtn);
+        return container;
     }
 
     createCanvas() {

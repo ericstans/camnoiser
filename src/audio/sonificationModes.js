@@ -8,9 +8,7 @@ export class SonificationModes {
         this.audioCtx = audioManager.getAudioContext();
         this.oscillator = audioManager.getOscillator();
         this.gain = audioManager.getGain();
-        this.stereoPanner = audioManager.getStereoPanner();
         this.bandGains = audioManager.getBandGains();
-        this.bandPanners = audioManager.getBandPanners();
 
         // For multi-frame blend mode
         this.blendFrameCount = 5;
@@ -19,12 +17,6 @@ export class SonificationModes {
         // For frame/row audio buffer playback
         this.lastFrameBufferSource = null;
         this.lastRowBufferSources = [];
-
-        // For chrominance 3-frame mode
-        this.chrominanceFrameCounter = 0;
-        this.chrominancePanCycle = 0;
-        this.chrominanceBluePhase = Math.random() * Math.PI * 2; // Random phase for blue signal
-        this.chrominanceYellowPhase = Math.random() * Math.PI * 2; // Random phase for yellow signal
     }
 
     // Helper functions for stopping playback
@@ -156,10 +148,8 @@ export class SonificationModes {
 
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
-        const panner = this.audioCtx.createStereoPanner();
-        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(panner).connect(this.audioCtx.destination);
+        src.connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -181,10 +171,8 @@ export class SonificationModes {
                 rowData[x] = ((data[idx] + data[idx + 1] + data[idx + 2]) / 3) / 127.5 - 1;
             }
             const src = this.audioCtx.createBufferSource();
-            const panner = this.audioCtx.createStereoPanner();
-            panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
             src.buffer = rowBuffer;
-            src.connect(panner).connect(this.audioCtx.destination);
+            src.connect(this.audioCtx.destination);
             src.start(this.audioCtx.currentTime + y * 0.001);
             this.lastRowBufferSources.push(src);
         }
@@ -207,13 +195,103 @@ export class SonificationModes {
 
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
-        const panner = this.audioCtx.createStereoPanner();
-        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(panner).connect(this.audioCtx.destination);
+        src.connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
+    }
+
+    // Mode 5b: Green Channel Only
+    greenChannelBufferMode(data) {
+        this.stopAllBuffers();
+        this.gain.gain.value = 0;
+        for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
+        const numSamples = this.canvas.width * this.canvas.height;
+        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
+        const buf = audioBuffer.getChannelData(0);
+        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+            buf[j] = (data[i + 1] / 127.5) - 1;
+        }
+        this.stopFrameBufferPlayback();
+        const src = this.audioCtx.createBufferSource();
+        src.buffer = audioBuffer;
+        src.connect(this.audioCtx.destination);
+        src.start();
+        this.lastFrameBufferSource = src;
+        setTimeout(() => this.stopFrameBufferPlayback(), 33);
+    }
+
+    // Mode 5c: Blue Channel Only
+    blueChannelBufferMode(data) {
+        this.stopAllBuffers();
+        this.gain.gain.value = 0;
+        for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
+        const numSamples = this.canvas.width * this.canvas.height;
+        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
+        const buf = audioBuffer.getChannelData(0);
+        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+            buf[j] = (data[i + 2] / 127.5) - 1;
+        }
+        this.stopFrameBufferPlayback();
+        const src = this.audioCtx.createBufferSource();
+        src.buffer = audioBuffer;
+        src.connect(this.audioCtx.destination);
+        src.start();
+        this.lastFrameBufferSource = src;
+        setTimeout(() => this.stopFrameBufferPlayback(), 33);
+    }
+
+    // Mode 5d: RGB Split Panned (R left, G center, B right)
+    rgbSplitPannedMode(data) {
+        this.stopAllBuffers();
+        this.gain.gain.value = 0;
+        for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
+
+        const numSamples = this.canvas.width * this.canvas.height;
+
+        const redBuffer = this.audioManager.createAudioBuffer(numSamples);
+        const greenBuffer = this.audioManager.createAudioBuffer(numSamples);
+        const blueBuffer = this.audioManager.createAudioBuffer(numSamples);
+
+        const r = redBuffer.getChannelData(0);
+        const g = greenBuffer.getChannelData(0);
+        const b = blueBuffer.getChannelData(0);
+
+        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+            r[j] = (data[i] / 127.5) - 1;
+            g[j] = (data[i + 1] / 127.5) - 1;
+            b[j] = (data[i + 2] / 127.5) - 1;
+        }
+
+        // Create sources and panners
+        const redSrc = this.audioCtx.createBufferSource();
+        redSrc.buffer = redBuffer;
+        const redPanner = this.audioCtx.createStereoPanner();
+        redPanner.pan.value = -1; // left
+        redSrc.connect(redPanner).connect(this.audioCtx.destination);
+
+        const greenSrc = this.audioCtx.createBufferSource();
+        greenSrc.buffer = greenBuffer;
+        const greenPanner = this.audioCtx.createStereoPanner();
+        greenPanner.pan.value = 0; // center
+        greenSrc.connect(greenPanner).connect(this.audioCtx.destination);
+
+        const blueSrc = this.audioCtx.createBufferSource();
+        blueSrc.buffer = blueBuffer;
+        const bluePanner = this.audioCtx.createStereoPanner();
+        bluePanner.pan.value = 1; // right
+        blueSrc.connect(bluePanner).connect(this.audioCtx.destination);
+
+        // Start all
+        redSrc.start();
+        greenSrc.start();
+        blueSrc.start();
+
+        // Track to stop (reuse lastRowBufferSources as a pool)
+        this.stopRowBufferPlayback();
+        this.lastRowBufferSources.push(redSrc, greenSrc, blueSrc);
+        setTimeout(() => this.stopRowBufferPlayback(), 33);
     }
 
     // Mode 6: Frame Buffer Loop
@@ -232,11 +310,9 @@ export class SonificationModes {
 
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
-        const panner = this.audioCtx.createStereoPanner();
-        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
         src.loop = true;
-        src.connect(panner).connect(this.audioCtx.destination);
+        src.connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         // Let it loop for 0.5s, then stop
@@ -268,10 +344,8 @@ export class SonificationModes {
 
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
-        const panner = this.audioCtx.createStereoPanner();
-        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(panner).connect(this.audioCtx.destination);
+        src.connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -302,10 +376,8 @@ export class SonificationModes {
 
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
-        const panner = this.audioCtx.createStereoPanner();
-        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(panner).connect(this.audioCtx.destination);
+        src.connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -343,16 +415,14 @@ export class SonificationModes {
         for (let i = 1; i <= numHarmonics; i++) {
             const osc = this.audioCtx.createOscillator();
             const gain = this.audioCtx.createGain();
-            const panner = this.audioCtx.createStereoPanner();
 
             osc.type = 'sine';
             osc.frequency.value = baseFreq * i;
 
             // Higher harmonics get quieter
             gain.gain.value = 0.1 / i;
-            panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
 
-            osc.connect(gain).connect(panner).connect(this.audioCtx.destination);
+            osc.connect(gain).connect(this.audioCtx.destination);
             osc.start();
 
             this.harmonicOscillators.push(osc);
@@ -419,12 +489,8 @@ export class SonificationModes {
             // Set grain gain based on brightness (ensure minimum volume)
             grainGain.gain.value = Math.max(0.1, (brightness / 255) * 0.5);
 
-            // Add panning to each grain
-            const grainPanner = this.audioCtx.createStereoPanner();
-            grainPanner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
-            
-            // Connect grain through gain and panner to output
-            grain.connect(grainGain).connect(grainPanner).connect(this.audioCtx.destination);
+            // Connect grain through gain to output
+            grain.connect(grainGain).connect(this.audioCtx.destination);
 
             // Position affects timing (ensure positive delay)
             const delay = Math.max(0, (x / this.canvas.width) * 0.1);
@@ -488,7 +554,6 @@ export class SonificationModes {
         for (let i = 0; i < fftSize; i++) {
             const osc = this.audioCtx.createOscillator();
             const gain = this.audioCtx.createGain();
-            const panner = this.audioCtx.createStereoPanner();
 
             osc.type = 'sine';
             // Map spectrum index to frequency (50Hz to 5000Hz)
@@ -496,9 +561,8 @@ export class SonificationModes {
 
             // Map brightness to gain
             gain.gain.value = (spectrum[i] / 255) * 0.1;
-            panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
 
-            osc.connect(gain).connect(panner).connect(this.audioCtx.destination);
+            osc.connect(gain).connect(this.audioCtx.destination);
             osc.start();
 
             this.spectralOscillators.push(osc);
@@ -591,12 +655,8 @@ export class SonificationModes {
         gain.gain.setValueAtTime(0, now);
         gain.gain.linearRampToValueAtTime(noteGain, now + attackTime);
 
-        // Add panning to the note
-        const panner = this.audioCtx.createStereoPanner();
-        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
-        
         // Sustain indefinitely (no automatic stop)
-        osc.connect(gain).connect(panner).connect(this.audioCtx.destination);
+        osc.connect(gain).connect(this.audioCtx.destination);
         osc.start(now);
 
         // Store note state
@@ -677,12 +737,9 @@ export class SonificationModes {
                 // Brightness affects volume
                 gain.gain.value = (brightness / 255) * 0.3;
 
-                // Add panning based on X position combined with global pan setting
+                // Add panning based on X position
                 const panner = this.audioCtx.createStereoPanner();
-                const localPan = (x / this.canvas.width) * 2 - 1;
-                const globalPan = this.stereoPanner.pan.value;
-                // Combine local and global panning (clamp to valid range)
-                panner.pan.value = Math.max(-1, Math.min(1, localPan + globalPan));
+                panner.pan.value = (x / this.canvas.width) * 2 - 1;
 
                 osc.connect(gain).connect(panner).connect(this.audioCtx.destination);
                 osc.start();
@@ -730,34 +787,28 @@ export class SonificationModes {
         // Red channel → Pitch (frequency)
         const pitchOsc = this.audioCtx.createOscillator();
         const pitchGain = this.audioCtx.createGain();
-        const pitchPanner = this.audioCtx.createStereoPanner();
         pitchOsc.type = 'sine';
         pitchOsc.frequency.value = 110 + (red / 255) * 880; // A2 to A5
         pitchGain.gain.value = 0.2;
-        pitchPanner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
-        pitchOsc.connect(pitchGain).connect(pitchPanner).connect(this.audioCtx.destination);
+        pitchOsc.connect(pitchGain).connect(this.audioCtx.destination);
         pitchOsc.start();
         this.crossModalOscillators.push(pitchOsc);
 
         // Green channel → Timbre (waveform)
         const timbreOsc = this.audioCtx.createOscillator();
         const timbreGain = this.audioCtx.createGain();
-        const timbrePanner = this.audioCtx.createStereoPanner();
         timbreOsc.type = green > 128 ? 'square' : 'sawtooth';
         timbreOsc.frequency.value = 220 + (green / 255) * 440; // A3 to A4
         timbreGain.gain.value = 0.15;
-        timbrePanner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
-        timbreOsc.connect(timbreGain).connect(timbrePanner).connect(this.audioCtx.destination);
+        timbreOsc.connect(timbreGain).connect(this.audioCtx.destination);
         timbreOsc.start();
         this.crossModalOscillators.push(timbreOsc);
 
         // Blue channel → Rhythm (pulse)
         const rhythmOsc = this.audioCtx.createOscillator();
         const rhythmGain = this.audioCtx.createGain();
-        const rhythmPanner = this.audioCtx.createStereoPanner();
         rhythmOsc.type = 'triangle';
         rhythmOsc.frequency.value = 330 + (blue / 255) * 330; // E4 to E5
-        rhythmPanner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
 
         // Create rhythmic pattern
         const rhythmPattern = [1, 0, 1, 0, 1, 0, 1, 0]; // 8-beat pattern
@@ -773,7 +824,7 @@ export class SonificationModes {
             beatIndex = (beatIndex + 1) % rhythmPattern.length;
         }, (60 / (blue / 255 * 120 + 60)) * 1000); // BPM based on blue value
 
-        rhythmOsc.connect(rhythmGain).connect(rhythmPanner).connect(this.audioCtx.destination);
+        rhythmOsc.connect(rhythmGain).connect(this.audioCtx.destination);
         rhythmOsc.start();
         this.crossModalOscillators.push(rhythmOsc);
 
@@ -794,142 +845,11 @@ export class SonificationModes {
         }
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
-        const panner = this.audioCtx.createStereoPanner();
-        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(panner).connect(this.audioCtx.destination);
+        src.connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
-    }
-
-    // Chrominance as Audio Buffer - 3 Frame Cycle with Blue/Yellow Fading
-    chrominance3FrameBufferMode(data) {
-        this.stopAllBuffers();
-        
-        // Only process every 3rd frame
-        this.chrominanceFrameCounter++;
-        if (this.chrominanceFrameCounter < 3) {
-            return; // Skip this frame
-        }
-        this.chrominanceFrameCounter = 0; // Reset counter
-
-        const numSamples = this.canvas.width * this.canvas.height;
-        
-        // Create separate buffers for blue and yellow signals
-        const blueBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const yellowBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const blueData = blueBuffer.getChannelData(0);
-        const yellowData = yellowBuffer.getChannelData(0);
-        
-        // Process chrominance and separate into blue and yellow signals
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-            // YCbCr conversion: Cb = -0.168736*R - 0.331264*G + 0.5*B + 128
-            const cb = -0.168736 * data[i] - 0.331264 * data[i + 1] + 0.5 * data[i + 2] + 128;
-            const normalizedCb = (cb / 127.5) - 1; // Convert to -1 to 1 range
-            
-            // Separate into blue (positive) and yellow (negative) signals
-            if (normalizedCb > 0) {
-                blueData[j] = normalizedCb;   // Blue content
-                yellowData[j] = 0;           // No yellow content
-            } else {
-                blueData[j] = 0;             // No blue content
-                yellowData[j] = -normalizedCb; // Yellow content (make positive)
-            }
-        }
-        
-        // Calculate fading based on 1-second cycle with random phases
-        const currentTime = this.audioCtx.currentTime;
-        const blueFade = (Math.sin(2 * Math.PI * currentTime + this.chrominanceBluePhase) + 1) / 2; // 0 to 1
-        const yellowFade = (Math.sin(2 * Math.PI * currentTime + this.chrominanceYellowPhase) + 1) / 2; // 0 to 1
-        
-        // Determine panning based on frame cycle
-        const panValues = [-1, 0, 1]; // left, center, right
-        const currentPan = panValues[this.chrominancePanCycle];
-        
-        // Create blue signal source
-        const blueSrc = this.audioCtx.createBufferSource();
-        const blueGain = this.audioCtx.createGain();
-        const bluePanner = this.audioCtx.createStereoPanner();
-        
-        blueSrc.buffer = blueBuffer;
-        bluePanner.pan.value = currentPan;
-        
-        // Apply fading only to left and right panning (frames 1 and 3)
-        if (currentPan !== 0) {
-            blueGain.gain.value = blueFade;
-        } else {
-            blueGain.gain.value = 0.5; // 50% for center frame
-        }
-        
-        blueSrc.connect(blueGain).connect(bluePanner).connect(this.audioCtx.destination);
-        blueSrc.start();
-        
-        // Create yellow signal source
-        const yellowSrc = this.audioCtx.createBufferSource();
-        const yellowGain = this.audioCtx.createGain();
-        const yellowPanner = this.audioCtx.createStereoPanner();
-        
-        yellowSrc.buffer = yellowBuffer;
-        yellowPanner.pan.value = currentPan;
-        
-        // Apply fading only to left and right panning (frames 1 and 3)
-        if (currentPan !== 0) {
-            yellowGain.gain.value = yellowFade;
-        } else {
-            yellowGain.gain.value = 0.5; // 50% for center frame
-        }
-        
-        yellowSrc.connect(yellowGain).connect(yellowPanner).connect(this.audioCtx.destination);
-        yellowSrc.start();
-        
-        // Store sources for cleanup
-        this.lastFrameBufferSource = blueSrc; // We'll use this for cleanup timing
-        
-        // Move to next pan position for next time
-        this.chrominancePanCycle = (this.chrominancePanCycle + 1) % 3;
-        
-        setTimeout(() => this.stopFrameBufferPlayback(), 100); // Longer duration since we process every 3rd frame
-    }
-
-    // Chrominance as Audio Buffer - 3 Frame Cycle with Panning (Original Version)
-    chrominance3FrameBufferModeOld(data) {
-        this.stopAllBuffers();
-        
-        // Only process every 3rd frame
-        this.chrominanceFrameCounter++;
-        if (this.chrominanceFrameCounter < 3) {
-            return; // Skip this frame
-        }
-        this.chrominanceFrameCounter = 0; // Reset counter
-
-        const numSamples = this.canvas.width * this.canvas.height;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
-        
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-            // YCbCr conversion: Cb = -0.168736*R - 0.331264*G + 0.5*B + 128
-            const cb = -0.168736 * data[i] - 0.331264 * data[i + 1] + 0.5 * data[i + 2] + 128;
-            buf[j] = (cb / 127.5) - 1;
-        }
-        
-        this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        const panner = this.audioCtx.createStereoPanner();
-        
-        // Determine panning based on frame cycle
-        const panValues = [-1, 0, 1]; // left, center, right
-        const currentPan = panValues[this.chrominancePanCycle];
-        panner.pan.value = currentPan;
-        
-        // Move to next pan position for next time
-        this.chrominancePanCycle = (this.chrominancePanCycle + 1) % 3;
-        
-        src.buffer = audioBuffer;
-        src.connect(panner).connect(this.audioCtx.destination);
-        src.start();
-        this.lastFrameBufferSource = src;
-        setTimeout(() => this.stopFrameBufferPlayback(), 100); // Longer duration since we process every 3rd frame
     }
 
     // Frame Difference Buffer (motion)
@@ -951,10 +871,8 @@ export class SonificationModes {
         this._prevFrameData = new Uint8ClampedArray(data);
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
-        const panner = this.audioCtx.createStereoPanner();
-        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(panner).connect(this.audioCtx.destination);
+        src.connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -995,10 +913,8 @@ export class SonificationModes {
         }
         this.stopFrameBufferPlayback();
         const src = this.audioCtx.createBufferSource();
-        const panner = this.audioCtx.createStereoPanner();
-        panner.pan.value = this.stereoPanner.pan.value; // Use current pan setting
         src.buffer = audioBuffer;
-        src.connect(panner).connect(this.audioCtx.destination);
+        src.connect(this.audioCtx.destination);
         src.start();
         this.lastFrameBufferSource = src;
         setTimeout(() => this.stopFrameBufferPlayback(), 33);
@@ -1019,12 +935,6 @@ export class SonificationModes {
             case 'chrominance-buffer':
                 this.chrominanceBufferMode(data);
                 break;
-            case 'chrominance-3frame-buffer':
-                this.chrominance3FrameBufferMode(data);
-                break;
-            case 'chrominance-3frame-buffer-old':
-                this.chrominance3FrameBufferModeOld(data);
-                break;
             case 'frame-diff-buffer':
                 this.frameDiffBufferMode(data);
                 break;
@@ -1036,6 +946,15 @@ export class SonificationModes {
                 break;
             case 'red-channel-buffer':
                 this.redChannelBufferMode(data);
+                break;
+            case 'green-channel-buffer':
+                this.greenChannelBufferMode(data);
+                break;
+            case 'blue-channel-buffer':
+                this.blueChannelBufferMode(data);
+                break;
+            case 'rgb-split-panned':
+                this.rgbSplitPannedMode(data);
                 break;
             case 'frame-buffer-loop':
                 this.frameBufferLoopMode(data);
