@@ -1,5 +1,9 @@
 const NOTE_ATTACK_TIME = 2;
 const NOTE_RELEASE_TIME = 2;
+const FRAME_RATE = 60; // target frame rate for scheduling
+const FRAME_DURATION = 1 / FRAME_RATE;
+const BUF_ATTACK = 0.005; // 5ms fade in for one-shot buffers
+const BUF_RELEASE = 0.005; // 5ms fade out
 export class SonificationModes {
     constructor(audioManager, canvas, ctx) {
         this.audioManager = audioManager;
@@ -17,6 +21,29 @@ export class SonificationModes {
         // For frame/row audio buffer playback
         this.lastFrameBufferSource = null;
         this.lastRowBufferSources = [];
+    }
+
+    // Schedule a one-shot buffer with a short fade envelope using the audio clock
+    // targetNode: where to connect after the envelope (e.g., destination or a panner)
+    // returns the created BufferSource
+    _scheduleOneShot(buffer, targetNode, { startTime = this.audioCtx.currentTime, duration = FRAME_DURATION, loop = false } = {}) {
+        const src = this.audioCtx.createBufferSource();
+        src.buffer = buffer;
+        src.loop = !!loop;
+
+        const gain = this.audioCtx.createGain();
+        // Envelope: 0 -> 1 over BUF_ATTACK, then sustain, then fade to 0 over BUF_RELEASE
+        const sustainEnd = Math.max(startTime + BUF_ATTACK, startTime + Math.max(0, duration - BUF_RELEASE));
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(1, startTime + BUF_ATTACK);
+        gain.gain.setValueAtTime(1, sustainEnd);
+        gain.gain.linearRampToValueAtTime(0, startTime + duration);
+
+        src.connect(gain).connect(targetNode || this.audioCtx.destination);
+        src.start(startTime);
+        // Stop slightly after envelope ends to ensure cleanup
+        src.stop(startTime + duration);
+        return src;
     }
 
     // Helper functions for stopping playback
@@ -147,12 +174,9 @@ export class SonificationModes {
         }
 
         this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
-        src.start();
+        const now = this.audioCtx.currentTime;
+        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { startTime: now, duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
-        setTimeout(() => this.stopFrameBufferPlayback(), 33);
     }
 
     // Mode 4: Rows as Audio Buffers
@@ -163,6 +187,9 @@ export class SonificationModes {
         this.stopFrameBufferPlayback();
         this.stopRowBufferPlayback();
 
+        const now = this.audioCtx.currentTime;
+        const perRowDuration = FRAME_DURATION / this.canvas.height;
+
         for (let y = 0; y < this.canvas.height; y++) {
             const rowBuffer = this.audioManager.createAudioBuffer(this.canvas.width);
             const rowData = rowBuffer.getChannelData(0);
@@ -170,13 +197,10 @@ export class SonificationModes {
                 const idx = (y * this.canvas.width + x) * 4;
                 rowData[x] = ((data[idx] + data[idx + 1] + data[idx + 2]) / 3) / 127.5 - 1;
             }
-            const src = this.audioCtx.createBufferSource();
-            src.buffer = rowBuffer;
-            src.connect(this.audioCtx.destination);
-            src.start(this.audioCtx.currentTime + y * 0.001);
+            const startTime = now + y * perRowDuration;
+            const src = this._scheduleOneShot(rowBuffer, this.audioCtx.destination, { startTime, duration: perRowDuration });
             this.lastRowBufferSources.push(src);
         }
-        setTimeout(() => this.stopRowBufferPlayback(), 33);
     }
 
     // Mode 5: Red Channel Only
@@ -194,12 +218,8 @@ export class SonificationModes {
         }
 
         this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
-        src.start();
+        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
-        setTimeout(() => this.stopFrameBufferPlayback(), 33);
     }
 
     // Mode 5b: Green Channel Only
@@ -214,12 +234,8 @@ export class SonificationModes {
             buf[j] = (data[i + 1] / 127.5) - 1;
         }
         this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
-        src.start();
+        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
-        setTimeout(() => this.stopFrameBufferPlayback(), 33);
     }
 
     // Mode 5c: Blue Channel Only
@@ -234,12 +250,8 @@ export class SonificationModes {
             buf[j] = (data[i + 2] / 127.5) - 1;
         }
         this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
-        src.start();
+        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
-        setTimeout(() => this.stopFrameBufferPlayback(), 33);
     }
 
     // Mode 5d: RGB Split Panned (R left, G center, B right)
@@ -264,34 +276,23 @@ export class SonificationModes {
             b[j] = (data[i + 2] / 127.5) - 1;
         }
 
-        // Create sources and panners
-        const redSrc = this.audioCtx.createBufferSource();
-        redSrc.buffer = redBuffer;
         const redPanner = this.audioCtx.createStereoPanner();
-        redPanner.pan.value = -1; // left
-        redSrc.connect(redPanner).connect(this.audioCtx.destination);
-
-        const greenSrc = this.audioCtx.createBufferSource();
-        greenSrc.buffer = greenBuffer;
+        redPanner.pan.value = -1;
         const greenPanner = this.audioCtx.createStereoPanner();
-        greenPanner.pan.value = 0; // center
-        greenSrc.connect(greenPanner).connect(this.audioCtx.destination);
-
-        const blueSrc = this.audioCtx.createBufferSource();
-        blueSrc.buffer = blueBuffer;
+        greenPanner.pan.value = 0;
         const bluePanner = this.audioCtx.createStereoPanner();
-        bluePanner.pan.value = 1; // right
-        blueSrc.connect(bluePanner).connect(this.audioCtx.destination);
+        bluePanner.pan.value = 1;
 
-        // Start all
-        redSrc.start();
-        greenSrc.start();
-        blueSrc.start();
-
-        // Track to stop (reuse lastRowBufferSources as a pool)
         this.stopRowBufferPlayback();
+        const now = this.audioCtx.currentTime;
+        const redSrc = this._scheduleOneShot(redBuffer, redPanner, { startTime: now, duration: FRAME_DURATION });
+        const greenSrc = this._scheduleOneShot(greenBuffer, greenPanner, { startTime: now, duration: FRAME_DURATION });
+        const blueSrc = this._scheduleOneShot(blueBuffer, bluePanner, { startTime: now, duration: FRAME_DURATION });
+        redPanner.connect(this.audioCtx.destination);
+        greenPanner.connect(this.audioCtx.destination);
+        bluePanner.connect(this.audioCtx.destination);
+
         this.lastRowBufferSources.push(redSrc, greenSrc, blueSrc);
-        setTimeout(() => this.stopRowBufferPlayback(), 33);
     }
 
     // Mode 6: Frame Buffer Loop
@@ -309,14 +310,10 @@ export class SonificationModes {
         }
 
         this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.loop = true;
-        src.connect(this.audioCtx.destination);
-        src.start();
+        const now = this.audioCtx.currentTime;
+        const duration = 0.5; // 500ms loop duration
+        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { startTime: now, duration, loop: true });
         this.lastFrameBufferSource = src;
-        // Let it loop for 0.5s, then stop
-        setTimeout(() => this.stopFrameBufferPlayback(), 500);
     }
 
     // Mode 7: Center Region Only
@@ -343,12 +340,8 @@ export class SonificationModes {
         }
 
         this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
-        src.start();
+        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
-        setTimeout(() => this.stopFrameBufferPlayback(), 33);
     }
 
     // Mode 8: Multi-frame Blend
@@ -375,12 +368,8 @@ export class SonificationModes {
         }
 
         this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
-        src.start();
+        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
-        setTimeout(() => this.stopFrameBufferPlayback(), 33);
     }
 
     // Mode 9: Harmonic Series Mode
@@ -844,12 +833,8 @@ export class SonificationModes {
             buf[j] = (cb / 127.5) - 1;
         }
         this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
-        src.start();
+        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
-        setTimeout(() => this.stopFrameBufferPlayback(), 33);
     }
 
     // Frame Difference Buffer (motion)
@@ -870,12 +855,8 @@ export class SonificationModes {
         }
         this._prevFrameData = new Uint8ClampedArray(data);
         this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
-        src.start();
+        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
-        setTimeout(() => this.stopFrameBufferPlayback(), 33);
     }
 
     // Edge Detection Buffer (Sobel)
@@ -912,12 +893,8 @@ export class SonificationModes {
             }
         }
         this.stopFrameBufferPlayback();
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(this.audioCtx.destination);
-        src.start();
+        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
-        setTimeout(() => this.stopFrameBufferPlayback(), 33);
     }
 
     // Main method to process frame based on selected mode
