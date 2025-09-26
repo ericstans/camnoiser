@@ -23,6 +23,73 @@ export class SonificationModes {
         this.lastRowBufferSources = [];
     }
 
+    // ---------------- Frame-duration sample helpers ----------------
+    _getFrameSampleCount() {
+        return Math.max(32, Math.round(this.audioCtx.sampleRate / FRAME_RATE));
+    }
+    _ensureScratch(len) {
+        if (!this._scratchFrame || this._scratchFrame.length !== len) {
+            this._scratchFrame = new Float32Array(len);
+            this._scratchCounts = new Uint32Array(len);
+        } else {
+            this._scratchFrame.fill(0);
+            this._scratchCounts.fill(0);
+        }
+    }
+    _downsample(totalUnits, valueFn, { scale255 = true } = {}) {
+        const L = this._getFrameSampleCount();
+        this._ensureScratch(L);
+        const out = this._scratchFrame;
+        const counts = this._scratchCounts;
+        for (let i = 0; i < totalUnits; i++) {
+            const bin = Math.floor(i * L / totalUnits);
+            out[bin] += valueFn(i);
+            counts[bin]++;
+        }
+        for (let i = 0; i < L; i++) {
+            if (counts[i] > 0) {
+                let v = out[i] / counts[i];
+                out[i] = scale255 ? (v / 127.5) - 1 : v; // map 0..255 to -1..1
+            } else out[i] = 0;
+        }
+        return out;
+    }
+    _createBufferFromSamples(samples) {
+        const buf = this.audioManager.createAudioBuffer(samples.length);
+        buf.copyToChannel(samples, 0, 0);
+        return buf;
+    }
+    _samplesBrightness(data) {
+        const w = this.canvas.width, h = this.canvas.height, total = w * h;
+        return this._downsample(total, (i) => {
+            const idx = i * 4; return (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+        }, { scale255: true });
+    }
+    _samplesChannel(data, chan) {
+        const w = this.canvas.width, h = this.canvas.height, total = w * h;
+        return this._downsample(total, (i) => data[i * 4 + chan], { scale255: true });
+    }
+    _samplesRegionBrightness(data, startX, startY, regionW, regionH) {
+        const w = this.canvas.width;
+        const total = regionW * regionH;
+        return this._downsample(total, (n) => {
+            const yLocal = Math.floor(n / regionW);
+            const xLocal = n - yLocal * regionW;
+            const x = startX + xLocal; const y = startY + yLocal;
+            const idx = (y * w + x) * 4;
+            return (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+        }, { scale255: true });
+    }
+    _samplesFromMinus1To1(array) {
+        const total = array.length;
+        const L = this._getFrameSampleCount();
+        this._ensureScratch(L);
+        const out = this._scratchFrame, counts = this._scratchCounts;
+        for (let i = 0; i < total; i++) { const bin = Math.floor(i * L / total); out[bin] += array[i]; counts[bin]++; }
+        for (let i = 0; i < L; i++) out[i] = counts[i] ? out[i] / counts[i] : 0;
+        return out;
+    }
+
     // Schedule a one-shot buffer with a short fade envelope using the audio clock
     // targetNode: where to connect after the envelope (e.g., destination or a panner)
     // returns the created BufferSource
@@ -119,6 +186,16 @@ export class SonificationModes {
             this.crossModalOscillators = [];
         }
 
+        // Clean up row sine bank oscillators
+        if (this.rowSineBankOscillators) {
+            this.rowSineBankOscillators.forEach(obj => {
+                if (obj && obj.osc) {
+                    try { obj.osc.stop(); } catch (e) { }
+                }
+            });
+            this.rowSineBankOscillators = null;
+        }
+
         // Clean up rhythm interval
         if (this.rhythmInterval) {
             clearInterval(this.rhythmInterval);
@@ -163,19 +240,11 @@ export class SonificationModes {
     frameAudioBufferMode(data) {
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        // Don't stop noise - just mute the band gains instead
         this.stopRowBufferPlayback();
-
-        const numSamples = this.canvas.width * this.canvas.height;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-            buf[j] = ((data[i] + data[i + 1] + data[i + 2]) / 3) / 127.5 - 1;
-        }
-
+        const samples = this._samplesBrightness(data);
+        const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const now = this.audioCtx.currentTime;
-        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { startTime: now, duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -183,24 +252,26 @@ export class SonificationModes {
     rowsAudioBuffersMode(data) {
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        // Don't stop noise - just mute the band gains instead
         this.stopFrameBufferPlayback();
         this.stopRowBufferPlayback();
-
-        const now = this.audioCtx.currentTime;
-        const perRowDuration = FRAME_DURATION / this.canvas.height;
-
-        for (let y = 0; y < this.canvas.height; y++) {
-            const rowBuffer = this.audioManager.createAudioBuffer(this.canvas.width);
-            const rowData = rowBuffer.getChannelData(0);
-            for (let x = 0; x < this.canvas.width; x++) {
-                const idx = (y * this.canvas.width + x) * 4;
-                rowData[x] = ((data[idx] + data[idx + 1] + data[idx + 2]) / 3) / 127.5 - 1;
+        // reinterpret rows: accumulate each row to a proportional slice of frame samples
+        const L = this._getFrameSampleCount();
+        const w = this.canvas.width, h = this.canvas.height;
+        const perRow = Math.max(1, Math.floor(L / h));
+        const scratch = new Float32Array(L);
+        for (let y = 0; y < h; y++) {
+            let rowSum = 0;
+            for (let x = 0; x < w; x++) {
+                const idx = (y * w + x) * 4;
+                rowSum += (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
             }
-            const startTime = now + y * perRowDuration;
-            const src = this._scheduleOneShot(rowBuffer, this.audioCtx.destination, { startTime, duration: perRowDuration });
-            this.lastRowBufferSources.push(src);
+            const avg = (rowSum / w) / 127.5 - 1;
+            const start = y * perRow;
+            for (let i = 0; i < perRow && (start + i) < L; i++) scratch[start + i] = avg;
         }
+        const buffer = this._createBufferFromSamples(scratch);
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        this.lastRowBufferSources.push(src);
     }
 
     // Mode 5: Red Channel Only
@@ -208,17 +279,10 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        // Don't stop noise - just mute the band gains instead
-
-        const numSamples = this.canvas.width * this.canvas.height;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-            buf[j] = (data[i] / 127.5) - 1;
-        }
-
+        const samples = this._samplesChannel(data, 0);
+        const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -227,14 +291,10 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        const numSamples = this.canvas.width * this.canvas.height;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-            buf[j] = (data[i + 1] / 127.5) - 1;
-        }
+        const samples = this._samplesChannel(data, 1);
+        const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -243,14 +303,10 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        const numSamples = this.canvas.width * this.canvas.height;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-            buf[j] = (data[i + 2] / 127.5) - 1;
-        }
+        const samples = this._samplesChannel(data, 2);
+        const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -259,39 +315,23 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-
-        const numSamples = this.canvas.width * this.canvas.height;
-
-        const redBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const greenBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const blueBuffer = this.audioManager.createAudioBuffer(numSamples);
-
-        const r = redBuffer.getChannelData(0);
-        const g = greenBuffer.getChannelData(0);
-        const b = blueBuffer.getChannelData(0);
-
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-            r[j] = (data[i] / 127.5) - 1;
-            g[j] = (data[i + 1] / 127.5) - 1;
-            b[j] = (data[i + 2] / 127.5) - 1;
-        }
-
-        const redPanner = this.audioCtx.createStereoPanner();
-        redPanner.pan.value = -1;
-        const greenPanner = this.audioCtx.createStereoPanner();
-        greenPanner.pan.value = 0;
-        const bluePanner = this.audioCtx.createStereoPanner();
-        bluePanner.pan.value = 1;
-
+        const rs = this._samplesChannel(data, 0);
+        const gs = this._samplesChannel(data, 1);
+        const bs = this._samplesChannel(data, 2);
+        const rBuf = this._createBufferFromSamples(rs);
+        const gBuf = this._createBufferFromSamples(gs);
+        const bBuf = this._createBufferFromSamples(bs);
+        const redPanner = this.audioCtx.createStereoPanner(); redPanner.pan.value = -1;
+        const greenPanner = this.audioCtx.createStereoPanner(); greenPanner.pan.value = 0;
+        const bluePanner = this.audioCtx.createStereoPanner(); bluePanner.pan.value = 1;
         this.stopRowBufferPlayback();
         const now = this.audioCtx.currentTime;
-        const redSrc = this._scheduleOneShot(redBuffer, redPanner, { startTime: now, duration: FRAME_DURATION });
-        const greenSrc = this._scheduleOneShot(greenBuffer, greenPanner, { startTime: now, duration: FRAME_DURATION });
-        const blueSrc = this._scheduleOneShot(blueBuffer, bluePanner, { startTime: now, duration: FRAME_DURATION });
+        const redSrc = this._scheduleOneShot(rBuf, redPanner, { startTime: now, duration: FRAME_DURATION });
+        const greenSrc = this._scheduleOneShot(gBuf, greenPanner, { startTime: now, duration: FRAME_DURATION });
+        const blueSrc = this._scheduleOneShot(bBuf, bluePanner, { startTime: now, duration: FRAME_DURATION });
         redPanner.connect(this.audioCtx.destination);
         greenPanner.connect(this.audioCtx.destination);
         bluePanner.connect(this.audioCtx.destination);
-
         this.lastRowBufferSources.push(redSrc, greenSrc, blueSrc);
     }
 
@@ -300,19 +340,12 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        // Don't stop noise - just mute the band gains instead
-
-        const numSamples = this.canvas.width * this.canvas.height;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-            buf[j] = ((data[i] + data[i + 1] + data[i + 2]) / 3) / 127.5 - 1;
-        }
-
+        const samples = this._samplesBrightness(data);
+        const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
         const now = this.audioCtx.currentTime;
-        const duration = 0.5; // 500ms loop duration
-        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { startTime: now, duration, loop: true });
+        const duration = 0.5; // maintain loop feature
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { startTime: now, duration, loop: true });
         this.lastFrameBufferSource = src;
     }
 
@@ -321,26 +354,14 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        // Don't stop noise - just mute the band gains instead
-
-        // Use only the center region (e.g., 1/4 of the frame)
         const regionW = Math.floor(this.canvas.width / 2);
         const regionH = Math.floor(this.canvas.height / 2);
         const startX = Math.floor(this.canvas.width / 4);
         const startY = Math.floor(this.canvas.height / 4);
-        const numSamples = regionW * regionH;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
-        let j = 0;
-        for (let y = startY; y < startY + regionH; y++) {
-            for (let x = startX; x < startX + regionW; x++) {
-                const idx = (y * this.canvas.width + x) * 4;
-                buf[j++] = ((data[idx] + data[idx + 1] + data[idx + 2]) / 3) / 127.5 - 1;
-            }
-        }
-
+        const samples = this._samplesRegionBrightness(data, startX, startY, regionW, regionH);
+        const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -349,26 +370,28 @@ export class SonificationModes {
         this.stopAllBuffers();
         this.gain.gain.value = 0;
         for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
-        // Don't stop noise - just mute the band gains instead
-
-        // Keep a buffer of the last N frames
         if (this.blendFrames.length >= this.blendFrameCount) this.blendFrames.shift();
         this.blendFrames.push(new Uint8ClampedArray(data));
-
-        // Blend frames (average)
-        const numSamples = this.canvas.width * this.canvas.height;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+        // Average brightness across stored frames per pixel then downsample
+        const w = this.canvas.width, h = this.canvas.height, total = w * h;
+        const L = this._getFrameSampleCount();
+        this._ensureScratch(L);
+        const out = this._scratchFrame, counts = this._scratchCounts;
+        for (let p = 0; p < total; p++) {
+            const bin = Math.floor(p * L / total);
             let sum = 0;
+            const base = p * 4;
             for (let f = 0; f < this.blendFrames.length; f++) {
-                sum += (this.blendFrames[f][i] + this.blendFrames[f][i + 1] + this.blendFrames[f][i + 2]) / 3;
+                const fr = this.blendFrames[f];
+                sum += (fr[base] + fr[base + 1] + fr[base + 2]) / 3;
             }
-            buf[j] = (sum / this.blendFrames.length) / 127.5 - 1;
+            out[bin] += sum / this.blendFrames.length;
+            counts[bin]++;
         }
-
+        for (let i = 0; i < L; i++) out[i] = counts[i] ? (out[i] / counts[i]) / 127.5 - 1 : 0;
+        const buffer = this._createBufferFromSamples(out);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -824,77 +847,134 @@ export class SonificationModes {
     // Chrominance as Audio Buffer (Cb channel)
     chrominanceBufferMode(data) {
         this.stopAllBuffers();
-        const numSamples = this.canvas.width * this.canvas.height;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-            // YCbCr conversion: Cb = -0.168736*R - 0.331264*G + 0.5*B + 128
-            const cb = -0.168736 * data[i] - 0.331264 * data[i + 1] + 0.5 * data[i + 2] + 128;
-            buf[j] = (cb / 127.5) - 1;
-        }
+        const w = this.canvas.width, h = this.canvas.height, total = w * h;
+        const samples = this._downsample(total, (i) => {
+            const idx = i * 4;
+            return -0.168736 * data[idx] - 0.331264 * data[idx + 1] + 0.5 * data[idx + 2] + 128;
+        }, { scale255: true });
+        const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
     // Frame Difference Buffer (motion)
     frameDiffBufferMode(data) {
         this.stopAllBuffers();
-        const numSamples = this.canvas.width * this.canvas.height;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
+        const w = this.canvas.width, h = this.canvas.height, total = w * h;
+        const diffVals = new Float32Array(total);
         if (!this._prevFrameData) {
             this._prevFrameData = new Uint8ClampedArray(data.length);
-            for (let j = 0; j < numSamples; j++) buf[j] = 0;
         } else {
-            for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+            for (let p = 0; p < total; p++) {
+                const i = p * 4;
                 const currGray = (data[i] + data[i + 1] + data[i + 2]) / 3;
                 const prevGray = (this._prevFrameData[i] + this._prevFrameData[i + 1] + this._prevFrameData[i + 2]) / 3;
-                buf[j] = ((currGray - prevGray) / 255);
+                diffVals[p] = (currGray - prevGray) / 255; // already roughly -1..1 range
             }
         }
         this._prevFrameData = new Uint8ClampedArray(data);
+        const samples = this._samplesFromMinus1To1(diffVals);
+        const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
     // Edge Detection Buffer (Sobel)
     edgeDetectBufferMode(data) {
         this.stopAllBuffers();
-        const w = this.canvas.width, h = this.canvas.height;
-        const numSamples = w * h;
-        const audioBuffer = this.audioManager.createAudioBuffer(numSamples);
-        const buf = audioBuffer.getChannelData(0);
-        // Convert to grayscale
-        const gray = new Float32Array(numSamples);
-        for (let y = 0; y < h; y++) {
-            for (let x = 0; x < w; x++) {
-                const idx = (y * w + x) * 4;
-                gray[y * w + x] = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-            }
+        const w = this.canvas.width, h = this.canvas.height, total = w * h;
+        const gray = new Float32Array(total);
+        for (let p = 0; p < total; p++) {
+            const i = p * 4; gray[p] = (data[i] + data[i + 1] + data[i + 2]) / 3;
         }
-        // Sobel kernels
-        const kx = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]];
-        const ky = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]];
+        const sobel = new Float32Array(total);
+        const kx = [[-1,0,1],[-2,0,2],[-1,0,1]]; const ky = [[-1,-2,-1],[0,0,0],[1,2,1]];
         for (let y = 1; y < h - 1; y++) {
             for (let x = 1; x < w - 1; x++) {
                 let gx = 0, gy = 0;
-                for (let kyIdx = -1; kyIdx <= 1; kyIdx++) {
-                    for (let kxIdx = -1; kxIdx <= 1; kxIdx++) {
-                        const px = x + kxIdx, py = y + kyIdx;
-                        const val = gray[py * w + px];
-                        gx += kx[kyIdx + 1][kxIdx + 1] * val;
-                        gy += ky[kyIdx + 1][kxIdx + 1] * val;
+                for (let yy = -1; yy <= 1; yy++) {
+                    for (let xx = -1; xx <= 1; xx++) {
+                        const val = gray[(y + yy) * w + (x + xx)];
+                        gx += kx[yy + 1][xx + 1] * val;
+                        gy += ky[yy + 1][xx + 1] * val;
                     }
                 }
                 const mag = Math.sqrt(gx * gx + gy * gy);
-                buf[y * w + x] = (mag / 255) * 2 - 1;
+                sobel[y * w + x] = (mag / 255) * 2 - 1;
             }
         }
+        const samples = this._samplesFromMinus1To1(sobel);
+        const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(audioBuffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
+    }
+
+    // New Mode: Column Brightness driving Row Sine Bank
+    // For each column, compute average brightness across rows. Treat the horizontal axis as time (scanned left->right).
+    // Each canvas row owns a sine oscillator whose frequency is linearly spaced 50Hz..10kHz.
+    // Column brightness controls instantaneous amplitude ("velocity" interpreted as amplitude driver) at the corresponding time slice.
+    // We synthesize a short frame-duration buffer by summing all row sines with that shared per-column amplitude envelope.
+    // Finally we normalize to prevent clipping and schedule as a one-shot buffer.
+    columnRowSineBankBufferMode(data) {
+        // Continuous oscillator bank (one per selected row sample) to avoid clicks from ultra-short buffers.
+        // 1. Setup oscillator bank on first call.
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        if (w === 0 || h === 0) return;
+
+        // Limit number of oscillators for performance; sample rows uniformly.
+        const TARGET_ROWS = 64; // adjust as needed
+        if (!this.rowSineBankOscillators) {
+            this.stopAllBuffers(); // ensure clean slate (will not recurse due to null check after deletion)
+            this.gain.gain.value = 0;
+            for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
+            this.rowSineBankOscillators = [];
+            const fMin = 50;
+            const fMax = 10000;
+            for (let i = 0; i < TARGET_ROWS; i++) {
+                const osc = this.audioCtx.createOscillator();
+                const gain = this.audioCtx.createGain();
+                const rowY = Math.floor(i * h / TARGET_ROWS);
+                // Linear distribution as requested
+                const freq = fMin + (fMax - fMin) * (i / Math.max(1, TARGET_ROWS - 1));
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                gain.gain.value = 0; // start silent
+                osc.connect(gain).connect(this.audioCtx.destination);
+                osc.start();
+                this.rowSineBankOscillators.push({ osc, gain, rowY });
+            }
+        }
+
+        // 2. Compute average brightness for each sampled row and update gains smoothly.
+        const now = this.audioCtx.currentTime;
+        const rampTime = FRAME_DURATION * 0.9; // smooth within frame
+        const widthInv = 1 / Math.max(1, w);
+        for (let i = 0; i < this.rowSineBankOscillators.length; i++) {
+            const obj = this.rowSineBankOscillators[i];
+            const y = obj.rowY;
+            let sum = 0;
+            const base = y * w * 4;
+            for (let x = 0; x < w; x++) {
+                const idx = base + x * 4;
+                sum += (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+            }
+            const avg = sum * widthInv; // 0..255
+            // Gate: require at least 50% brightness for audibility.
+            // Map avg (0..255) -> norm (0..1), then threshold at 0.5.
+            // Below 0.5 => 0. Above 0.5 => re-normalize so 0.5->0, 1.0->1.
+            const norm = avg / 255;
+            const gated = norm <= 0.5 ? 0 : (norm - 0.5) / 0.5; // 0..1 after threshold
+            const targetGain = gated * 0.25; // apply overall level scaling
+            const g = obj.gain.gain;
+            // Cancel future automation to avoid buildup
+            if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(now); else g.cancelScheduledValues(now);
+            g.setValueAtTime(g.value, now);
+            g.linearRampToValueAtTime(targetGain, now + rampTime);
+        }
     }
 
     // Main method to process frame based on selected mode
@@ -959,6 +1039,9 @@ export class SonificationModes {
                 break;
             case 'cross-modal':
                 this.crossModalMode(data);
+                break;
+            case 'column-row-sine-bank':
+                this.columnRowSineBankBufferMode(data);
                 break;
             default:
                 console.warn('Unknown mode:', mode);

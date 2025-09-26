@@ -76,6 +76,7 @@ export class Controls {
             { value: 'white-noise-filtering', text: 'White Noise Filtering' },
             { value: 'frame-audio-buffer', text: 'Frame as Audio Buffer' },
             { value: 'rows-audio-buffers', text: 'Rows as Audio Buffers' },
+            { value: 'column-row-sine-bank', text: 'Column->Row Sine Bank' },
             { value: 'red-channel-buffer', text: 'Red Channel Only' },
             { value: 'green-channel-buffer', text: 'Green Channel Only' },
             { value: 'blue-channel-buffer', text: 'Blue Channel Only' },
