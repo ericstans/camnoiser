@@ -15,6 +15,8 @@ export class Controls {
         this.cameraSelect = null;
         this.refreshBtn = null;
         this.composeSelect = null;
+        this.hotkeysBound = false;
+        this.hotkeyHandler = null;
     }
 
     createControls() {
@@ -273,8 +275,43 @@ export class Controls {
         return this.panSlider;
     }
 
+    cycleMode(delta) {
+        if (!this.modeSelect || this.modeSelect.options.length === 0) return;
+        const optionsLength = this.modeSelect.options.length;
+        const currentIndex = this.modeSelect.selectedIndex < 0 ? 0 : this.modeSelect.selectedIndex;
+        const nextIndex = (currentIndex + delta + optionsLength) % optionsLength;
+        this.modeSelect.selectedIndex = nextIndex;
+        this.modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
     // Setup event listeners for the controls
     setupEventListeners() {
+        if (!this.hotkeysBound) {
+            this.hotkeyHandler = (event) => {
+                if (event.altKey || event.ctrlKey || event.metaKey || event.repeat) {
+                    return;
+                }
+
+                const target = event.target;
+                if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+                    return;
+                }
+
+                const key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+                const code = event.code || '';
+                if (key === 'z' || code === 'KeyZ') {
+                    event.preventDefault();
+                    this.cycleMode(-1);
+                } else if (key === 'x' || code === 'KeyX') {
+                    event.preventDefault();
+                    this.cycleMode(1);
+                }
+            };
+            window.addEventListener('keydown', this.hotkeyHandler, true);
+            document.addEventListener('keydown', this.hotkeyHandler, true);
+            this.hotkeysBound = true;
+        }
+
         if (this.startBtn && this.audioManager && this.sonificationModes) {
             this.startBtn.addEventListener('click', () => {
                 if (!this.audioStarted) {
