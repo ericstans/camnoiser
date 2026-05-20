@@ -108,9 +108,12 @@ export class Controls {
         });
 
         // Append mode selection to controls
+        const modeRow = document.createElement('div');
+        modeRow.className = 'control-row';
         this.modeLabel.appendChild(this.modeSelect);
-        this.controlsDiv.appendChild(this.modeLabel);
-        this.controlsDiv.appendChild(this.modeSelect);
+        modeRow.appendChild(this.modeLabel);
+        modeRow.appendChild(this.modeSelect);
+        this.controlsDiv.appendChild(modeRow);
     }
 
     createPanningSlider() {
@@ -177,9 +180,12 @@ export class Controls {
         });
 
         // Append panning controls to main controls
-        this.controlsDiv.appendChild(this.panLabel);
-        this.controlsDiv.appendChild(this.panSlider);
-        this.controlsDiv.appendChild(panValue);
+        const panRow = document.createElement('div');
+        panRow.className = 'control-row';
+        panRow.appendChild(this.panLabel);
+        panRow.appendChild(this.panSlider);
+        panRow.appendChild(panValue);
+        this.controlsDiv.appendChild(panRow);
     }
 
     createComposeSelection() {
@@ -201,14 +207,20 @@ export class Controls {
         });
         this.composeSelect.value = 'average';
 
-        this.controlsDiv.appendChild(label);
-        this.controlsDiv.appendChild(this.composeSelect);
+        const composeRow = document.createElement('div');
+        composeRow.className = 'control-row';
+        composeRow.appendChild(label);
+        composeRow.appendChild(this.composeSelect);
+        this.controlsDiv.appendChild(composeRow);
     }
 
     createStartButton() {
         this.startBtn = document.createElement('button');
         this.startBtn.textContent = 'Start Audio';
-        this.controlsDiv.appendChild(this.startBtn);
+        const startRow = document.createElement('div');
+        startRow.className = 'control-row';
+        startRow.appendChild(this.startBtn);
+        this.controlsDiv.appendChild(startRow);
     }
 
     getModeSelect() {

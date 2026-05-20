@@ -95,6 +95,14 @@
 }
 /* Camera controls */
 .camera-controls {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-row {
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 8px;
