@@ -15,6 +15,8 @@ export class Controls {
         this.cameraSelect = null;
         this.refreshBtn = null;
         this.composeSelect = null;
+        this.invertAnalysisCheckbox = null;
+        this.invertAnalysisLabel = null;
         this.hotkeysBound = false;
         this.hotkeyHandler = null;
     }
@@ -32,6 +34,9 @@ export class Controls {
         
     // Create compose mode selection
     this.createComposeSelection();
+
+        // Create analysis inversion toggle
+        this.createInvertAnalysisToggle();
 
         // Create panning slider
         this.createPanningSlider();
@@ -214,6 +219,21 @@ export class Controls {
         this.controlsDiv.appendChild(composeRow);
     }
 
+    createInvertAnalysisToggle() {
+        const row = document.createElement('div');
+        row.className = 'control-row';
+
+        this.invertAnalysisLabel = document.createElement('label');
+        this.invertAnalysisLabel.textContent = 'Invert Analysis Colors: ';
+
+        this.invertAnalysisCheckbox = document.createElement('input');
+        this.invertAnalysisCheckbox.type = 'checkbox';
+
+        this.invertAnalysisLabel.appendChild(this.invertAnalysisCheckbox);
+        row.appendChild(this.invertAnalysisLabel);
+        this.controlsDiv.appendChild(row);
+    }
+
     createStartButton() {
         this.startBtn = document.createElement('button');
         this.startBtn.textContent = 'Start Audio';
@@ -271,8 +291,18 @@ export class Controls {
         }
     }
 
+    onInvertAnalysisChange(handler) {
+        if (this.invertAnalysisCheckbox) {
+            this.invertAnalysisCheckbox.addEventListener('change', () => handler(this.invertAnalysisCheckbox.checked));
+        }
+    }
+
     setComposeModeValue(value) {
         if (this.composeSelect) this.composeSelect.value = value;
+    }
+
+    setInvertAnalysisChecked(checked) {
+        if (this.invertAnalysisCheckbox) this.invertAnalysisCheckbox.checked = checked;
     }
 
     getStartButton() {

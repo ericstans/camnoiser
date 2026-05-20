@@ -7,10 +7,12 @@ export class MultiCameraManager {
     constructor() {
         this.container = null;
         this.videoManagers = [];
+        this.analysisContainer = null;
         this.analysisCanvas = null;
         this.analysisCtx = null;
         this.permissionPrimed = false;
         this.composeMode = 'average'; // 'average' | 'side-by-side' | 'sum' | 'sum-normalize'
+        this.invertAnalysis = false;
     }
 
     createVideosContainer() {
@@ -20,13 +22,55 @@ export class MultiCameraManager {
     }
 
     createAnalysisCanvas() {
+        this.analysisContainer = document.createElement('div');
+        this.analysisContainer.className = 'video-container';
+        this.analysisContainer.style.display = 'none';
+
         this.analysisCanvas = document.createElement('canvas');
         this.analysisCanvas.width = CANVAS_WIDTH;
         this.analysisCanvas.height = CANVAS_HEIGHT;
-        this.analysisCanvas.style.display = 'none';
-        document.body.appendChild(this.analysisCanvas);
+        this.analysisCanvas.className = 'responsive-video';
+
+        const fsBtn = document.createElement('button');
+        fsBtn.className = 'fullscreen-btn';
+        fsBtn.setAttribute('aria-label', 'Toggle Fullscreen');
+        fsBtn.title = 'Fullscreen';
+        fsBtn.innerHTML = '<span class="fullscreen-icon">⛶</span> Fullscreen';
+
+        fsBtn.addEventListener('click', async () => {
+            try {
+                if (!document.fullscreenElement) {
+                    if (this.analysisContainer.requestFullscreen) {
+                        await this.analysisContainer.requestFullscreen();
+                    }
+                } else if (document.exitFullscreen) {
+                    await document.exitFullscreen();
+                }
+            } catch (e) {
+                console.warn('Fullscreen toggle failed:', e);
+            }
+        });
+
+        this.analysisContainer.appendChild(this.analysisCanvas);
+        this.analysisContainer.appendChild(fsBtn);
+
+        if (this.container) {
+            this.container.appendChild(this.analysisContainer);
+        } else {
+            document.body.appendChild(this.analysisContainer);
+        }
+
         this.analysisCtx = this.analysisCanvas.getContext('2d');
         return this.analysisCanvas;
+    }
+
+    setAnalysisVisible(isVisible) {
+        if (!this.analysisContainer) return;
+        this.analysisContainer.style.display = isVisible ? '' : 'none';
+    }
+
+    setInvertAnalysis(enabled) {
+        this.invertAnalysis = !!enabled;
     }
 
     getAnalysisCanvasContext() {
@@ -57,13 +101,25 @@ export class MultiCameraManager {
         // Stop existing
         this.stopAll();
         this.clearVideos();
-        if (!deviceIds || deviceIds.length === 0) return;
+        this.setAnalysisVisible(Array.isArray(deviceIds) && deviceIds.length > 1);
+        if (this.container && this.analysisContainer) {
+            this.container.appendChild(this.analysisContainer);
+        }
+        if (!deviceIds || deviceIds.length === 0) {
+            return;
+        }
 
         // Create a VideoManager per device
         const startPromises = deviceIds.map(async (id) => {
             const vm = new VideoManager();
             const el = vm.createVideoElement();
-            if (this.container) this.container.appendChild(el);
+            if (this.container) {
+                if (this.analysisContainer && this.analysisContainer.parentElement === this.container) {
+                    this.container.insertBefore(el, this.analysisContainer);
+                } else {
+                    this.container.appendChild(el);
+                }
+            }
             vm.createCanvas(); // hidden per-camera canvas for capture downscaled
             await vm.requestWebcamAccess(id, CANVAS_WIDTH, CANVAS_HEIGHT);
             await vm.startVideo();
@@ -74,7 +130,15 @@ export class MultiCameraManager {
 
     clearVideos() {
         if (this.container) {
-            while (this.container.firstChild) this.container.removeChild(this.container.firstChild);
+            Array.from(this.container.children).forEach((child) => {
+                if (child !== this.analysisContainer) {
+                    this.container.removeChild(child);
+                }
+            });
+
+            if (this.analysisContainer && !this.analysisContainer.isConnected) {
+                this.container.appendChild(this.analysisContainer);
+            }
         }
         this.videoManagers = [];
     }
@@ -102,6 +166,10 @@ export class MultiCameraManager {
                 this.analysisCtx.drawImage(v, i * segW, 0, targetW, h);
             }
             const img = this.analysisCtx.getImageData(0, 0, w, h);
+            if (this.invertAnalysis) {
+                this._invertImageData(img.data);
+                this.analysisCtx.putImageData(img, 0, 0);
+            }
             return img.data;
         }
 
@@ -155,8 +223,20 @@ export class MultiCameraManager {
             }
         }
 
+        if (this.invertAnalysis) {
+            this._invertImageData(out);
+        }
+
         this.analysisCtx.putImageData(outImg, 0, 0);
         return out;
+    }
+
+    _invertImageData(data) {
+        for (let i = 0; i < data.length; i += 4) {
+            data[i] = 255 - data[i];
+            data[i + 1] = 255 - data[i + 1];
+            data[i + 2] = 255 - data[i + 2];
+        }
     }
 
     setComposeMode(mode) {

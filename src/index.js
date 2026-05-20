@@ -53,6 +53,7 @@ class CamNoiserApp {
                 }
             });
             this.controls.onComposeModeChange((mode) => this.multiCamera.setComposeMode(mode));
+            this.controls.onInvertAnalysisChange((enabled) => this.multiCamera.setInvertAnalysis(enabled));
 
             // Request initial cameras (default: first available)
             await this.initializeCameras();
@@ -85,6 +86,8 @@ class CamNoiserApp {
             this.controls.selectCameraIds(defaultIds);
             this.multiCamera.setComposeMode('average');
             this.controls.setComposeModeValue('average');
+            this.multiCamera.setInvertAnalysis(false);
+            this.controls.setInvertAnalysisChecked(false);
             // Start sonification loop when first video starts playing
             this.startSonificationLoop();
         } catch (error) {
