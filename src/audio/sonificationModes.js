@@ -5,6 +5,110 @@ const FRAME_DURATION = 1 / FRAME_RATE;
 const BUF_ATTACK = 0.005; // 5ms fade in for one-shot buffers
 const BUF_RELEASE = 0.005; // 5ms fade out
 export class SonificationModes {
+        // For Separate Streams: get audio buffer for a frame and mode
+        getAudioBufferForMode(data, mode) {
+            // Use the same logic as processFrame, but return a Float32Array buffer
+            // Only support buffer-based modes for now (frame-audio-buffer, rows-audio-buffers, etc.)
+            let samples = null;
+            switch (mode) {
+                case 'avg-brightness':
+                    samples = this._samplesBrightness(data);
+                    break;
+                case 'frame-audio-buffer':
+                    samples = this._samplesBrightness(data);
+                    break;
+                case 'rows-audio-buffers': {
+                    const w = this.canvas.width, h = this.canvas.height;
+                    const L = this._getFrameSampleCount();
+                    const perRow = Math.max(1, Math.floor(L / h));
+                    const scratch = new Float32Array(L);
+                    for (let y = 0; y < h; y++) {
+                        let rowSum = 0;
+                        for (let x = 0; x < w; x++) {
+                            const idx = (y * w + x) * 4;
+                            rowSum += (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+                        }
+                        const avg = (rowSum / w) / 127.5 - 1;
+                        const start = y * perRow;
+                        for (let i = 0; i < perRow && (start + i) < L; i++) scratch[start + i] = avg;
+                    }
+                    samples = scratch;
+                    break;
+                }
+                case 'red-channel-buffer':
+                    samples = this._samplesChannel(data, 0);
+                    break;
+                case 'green-channel-buffer':
+                    samples = this._samplesChannel(data, 1);
+                    break;
+                case 'blue-channel-buffer':
+                    samples = this._samplesChannel(data, 2);
+                    break;
+                default:
+                    // Fallback: use avg-brightness
+                    samples = this._samplesBrightness(data);
+            }
+            // Return a copy to avoid mutation
+            return samples ? Float32Array.from(samples) : null;
+        }
+
+        // For Separate Streams: play a mixed buffer (Float32Array)
+        playMixedBuffer(buffer) {
+            if (!buffer || !buffer.length) return;
+            const audioBuffer = this.audioManager.createAudioBuffer(buffer.length);
+            audioBuffer.copyToChannel(buffer, 0, 0);
+            const src = this.audioManager.createBufferSource();
+            src.buffer = audioBuffer;
+            src.connect(this.audioCtx.destination);
+            src.start();
+        }
+
+        // For Separate Streams: pan each stream first, then apply a final/global pan.
+        playSeparateStreams(buffers, perStreamPans = [], globalPan = 0) {
+            if (!Array.isArray(buffers) || buffers.length === 0) return;
+
+            let minLen = Number.MAX_SAFE_INTEGER;
+            for (const buf of buffers) {
+                if (!buf || !buf.length) continue;
+                minLen = Math.min(minLen, buf.length);
+            }
+            if (!Number.isFinite(minLen) || minLen <= 0) return;
+
+            const now = this.audioCtx.currentTime;
+            const mixGain = this.audioCtx.createGain();
+            const globalPanner = this.audioCtx.createStereoPanner();
+            globalPanner.pan.value = Math.max(-1, Math.min(1, globalPan || 0));
+            // Keep mix energy in check as stream count grows.
+            mixGain.gain.value = 1 / Math.max(1, buffers.length);
+
+            mixGain.connect(globalPanner).connect(this.audioCtx.destination);
+
+            for (let i = 0; i < buffers.length; i++) {
+                const raw = buffers[i];
+                if (!raw || !raw.length) continue;
+
+                const truncated = new Float32Array(minLen);
+                truncated.set(raw.subarray(0, minLen));
+
+                // Normalize each stream before combining.
+                let max = 0;
+                for (let s = 0; s < truncated.length; s++) {
+                    max = Math.max(max, Math.abs(truncated[s]));
+                }
+                if (max > 0) {
+                    for (let s = 0; s < truncated.length; s++) {
+                        truncated[s] /= max;
+                    }
+                }
+
+                const bufferNode = this._createBufferFromSamples(truncated);
+                const streamPanner = this.audioCtx.createStereoPanner();
+                const streamPan = perStreamPans[i] ?? 0;
+                streamPanner.pan.value = Math.max(-1, Math.min(1, streamPan));
+                streamPanner.connect(mixGain);
+                this._scheduleOneShot(bufferNode, streamPanner, { startTime: now, duration: FRAME_DURATION });
+            }
+        }
     constructor(audioManager, canvas, ctx) {
         this.audioManager = audioManager;
         this.canvas = canvas;

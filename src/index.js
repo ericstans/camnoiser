@@ -98,20 +98,67 @@ class CamNoiserApp {
     // Start the main sonification loop
     startSonificationLoop() {
         const modeSelect = this.controls.getModeSelect();
-        
+        const getWebcamIds = () => this.controls.getSelectedCameraIds();
+        const getWebcamModes = () => this.controls.getWebcamModeSelections();
+        const getWebcamPans = () => this.controls.getWebcamPanSelections();
+        const composeSelect = this.controls.composeSelect;
+        const multiCamera = this.multiCamera;
+        const sonificationModes = this.sonificationModes;
+        const videoManagers = () => multiCamera.videoManagers;
+
         const sonifyFrame = () => {
-            // Get composite frame data from multi-camera
-            const data = this.multiCamera.getCompositeFrameData();
-            
-            if (data && this.controls.audioStarted) {
-                // Only process frame if audio has been started by user
-                this.sonificationModes.processFrame(data, modeSelect.value);
+            const composeMode = composeSelect ? composeSelect.value : 'average';
+            if (composeMode === 'separate-streams' && this.controls.audioStarted) {
+                // Per-webcam sonicification and mixing
+                const ids = getWebcamIds();
+                const modeMap = getWebcamModes();
+                const panMap = getWebcamPans();
+                const vms = videoManagers();
+                const perBuffers = [];
+                const perPans = [];
+                // For each webcam, process individually
+                vms.forEach((vm, idx) => {
+                    const id = ids[idx];
+                    if (!id) return;
+                    const v = vm.getVideo();
+                    if (!v || v.readyState < 2 || v.paused) return;
+                    const ctx = vm.getCanvasContext();
+                    if (!ctx) return;
+                    ctx.drawImage(v, 0, 0, vm.getCanvas().width, vm.getCanvas().height);
+                    const frame = ctx.getImageData(0, 0, vm.getCanvas().width, vm.getCanvas().height).data;
+                    // Use selected mode for this webcam
+                    const mode = modeMap[id] || modeSelect.value;
+                    // Synthesize audio buffer for this frame and mode
+                    // We'll use frameAudioBufferMode as a template for all modes
+                    // (Assume processFrame returns a buffer for this context)
+                    if (sonificationModes.getAudioBufferForMode) {
+                        const buf = sonificationModes.getAudioBufferForMode(frame, mode);
+                        if (buf) {
+                            perBuffers.push(buf);
+                            perPans.push(panMap[id] ?? 0);
+                        }
+                    }
+                });
+                const globalPan = parseFloat(this.controls.getPanSlider().value || '0');
+                if (perBuffers.length > 0) {
+                    if (sonificationModes.playSeparateStreams) {
+                        sonificationModes.playSeparateStreams(perBuffers, perPans, globalPan);
+                    } else if (sonificationModes.playMixedBuffer) {
+                        // Fallback for older builds
+                        sonificationModes.playMixedBuffer(perBuffers[0]);
+                    }
+                }
+            } else {
+                // Get composite frame data from multi-camera
+                const data = this.multiCamera.getCompositeFrameData();
+                if (data && this.controls.audioStarted) {
+                    // Only process frame if audio has been started by user
+                    this.sonificationModes.processFrame(data, modeSelect.value);
+                }
             }
-            
             // Continue the animation loop
             requestAnimationFrame(sonifyFrame);
         };
-
         // Start the loop
         requestAnimationFrame(sonifyFrame);
     }

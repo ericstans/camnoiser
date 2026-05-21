@@ -113,12 +113,12 @@ export class Controls {
         });
 
         // Append mode selection to controls
-        const modeRow = document.createElement('div');
-        modeRow.className = 'control-row';
+        this.modeRow = document.createElement('div');
+        this.modeRow.className = 'control-row';
         this.modeLabel.appendChild(this.modeSelect);
-        modeRow.appendChild(this.modeLabel);
-        modeRow.appendChild(this.modeSelect);
-        this.controlsDiv.appendChild(modeRow);
+        this.modeRow.appendChild(this.modeLabel);
+        this.modeRow.appendChild(this.modeSelect);
+        this.controlsDiv.appendChild(this.modeRow);
     }
 
     createPanningSlider() {
@@ -203,6 +203,7 @@ export class Controls {
             { value: 'side-by-side', text: 'Side-by-side' },
             { value: 'sum', text: 'Sum (Clamp)' },
             { value: 'sum-normalize', text: 'Sum (Normalize)' },
+            { value: 'separate-streams', text: 'Separate Streams' },
         ];
         options.forEach(o => {
             const opt = document.createElement('option');
@@ -212,11 +213,119 @@ export class Controls {
         });
         this.composeSelect.value = 'average';
 
-        const composeRow = document.createElement('div');
-        composeRow.className = 'control-row';
-        composeRow.appendChild(label);
-        composeRow.appendChild(this.composeSelect);
-        this.controlsDiv.appendChild(composeRow);
+        this.composeRow = document.createElement('div');
+        this.composeRow.className = 'control-row';
+        this.composeRow.appendChild(label);
+        this.composeRow.appendChild(this.composeSelect);
+        this.controlsDiv.appendChild(this.composeRow);
+
+        // Container for per-webcam mode dropdowns
+        this.webcamModesContainer = document.createElement('div');
+        this.webcamModesContainer.className = 'webcam-modes-container';
+        this.controlsDiv.appendChild(this.webcamModesContainer);
+
+        // Track per-webcam mode selections
+        this.webcamModeSelects = {};
+        this.webcamPanSliders = {};
+
+        // Listen for compose mode changes
+        this.composeSelect.addEventListener('change', () => {
+            this.updateModeSelectionVisibility();
+            this.updateWebcamModeDropdowns(this.getSelectedCameraIds());
+        });
+
+        this.updateModeSelectionVisibility();
+    }
+
+    updateModeSelectionVisibility() {
+        if (!this.modeRow || !this.composeSelect) return;
+        this.modeRow.style.display = this.composeSelect.value === 'separate-streams' ? 'none' : '';
+    }
+
+    // Call this whenever webcams or compose mode changes
+    updateWebcamModeDropdowns(webcamIds = []) {
+        const composeMode = this.composeSelect ? this.composeSelect.value : 'average';
+        const previousModes = this.getWebcamModeSelections();
+        const previousPans = this.getWebcamPanSelections();
+        // Remove old dropdowns
+        this.webcamModesContainer.innerHTML = '';
+        this.webcamModeSelects = {};
+        this.webcamPanSliders = {};
+        if (composeMode === 'separate-streams' && Array.isArray(webcamIds) && webcamIds.length > 0) {
+            // Limit to 10 webcams
+            const modeOptions = [
+                { value: 'avg-brightness', text: 'Avg Brightness to Pitch' },
+                { value: 'white-noise-filtering', text: 'White Noise Filtering' },
+                { value: 'frame-audio-buffer', text: 'Frame as Audio Buffer' },
+                { value: 'rows-audio-buffers', text: 'Rows as Audio Buffers' },
+                { value: 'column-row-sine-bank', text: 'Column->Row Sine Bank' },
+                { value: 'red-channel-buffer', text: 'Red Channel Only' },
+                { value: 'green-channel-buffer', text: 'Green Channel Only' },
+                { value: 'blue-channel-buffer', text: 'Blue Channel Only' },
+                { value: 'rgb-split-panned', text: 'RGB Split Panned' },
+                { value: 'frame-buffer-loop', text: 'Frame Buffer Loop' },
+                { value: 'center-region-buffer', text: 'Center Region Only' },
+                { value: 'multi-frame-blend', text: 'Multi-frame Blend' },
+                { value: 'chrominance-buffer', text: 'Chrominance as Audio Buffer' },
+                { value: 'chrominance-3frame-buffer', text: 'Chrominance 3-Frame Cycle' },
+                { value: 'chrominance-3frame-buffer-old', text: 'Chrominance 3-Frame Cycle (Old)' },
+                { value: 'frame-diff-buffer', text: 'Frame Difference Buffer' },
+                { value: 'edge-detect-buffer', text: 'Edge Detection Buffer' },
+                { value: 'harmonic-series', text: 'Harmonic Series' },
+                { value: 'granular', text: 'Granular Synthesis' },
+                { value: 'spectral', text: 'Spectral Analysis' },
+                { value: 'midi-like', text: 'MIDI-like Musical' },
+                { value: 'particle-system', text: 'Particle System' },
+                { value: 'cross-modal', text: 'Cross-Modal Mapping' }
+            ];
+            webcamIds.slice(0, 10).forEach((id, idx) => {
+                const row = document.createElement('div');
+                row.className = 'webcam-mode-row';
+
+                const label = document.createElement('label');
+                label.textContent = `Webcam ${idx + 1} Mode:`;
+
+                const select = document.createElement('select');
+                modeOptions.forEach(option => {
+                    const opt = document.createElement('option');
+                    opt.value = option.value;
+                    opt.textContent = option.text;
+                    select.appendChild(opt);
+                });
+
+                if (previousModes[id]) {
+                    select.value = previousModes[id];
+                }
+
+                const panLabel = document.createElement('label');
+                panLabel.textContent = 'Pan:';
+
+                const panSlider = document.createElement('input');
+                panSlider.type = 'range';
+                panSlider.min = '-1';
+                panSlider.max = '1';
+                panSlider.step = '0.1';
+                panSlider.value = previousPans[id] !== undefined ? String(previousPans[id]) : '0';
+                panSlider.className = 'pan-slider';
+
+                const panValue = document.createElement('span');
+                panValue.className = 'pan-value';
+                panValue.textContent = parseFloat(panSlider.value).toFixed(1);
+
+                panSlider.addEventListener('input', () => {
+                    panValue.textContent = parseFloat(panSlider.value).toFixed(1);
+                });
+
+                row.appendChild(label);
+                row.appendChild(select);
+                row.appendChild(panLabel);
+                row.appendChild(panSlider);
+                row.appendChild(panValue);
+                this.webcamModesContainer.appendChild(row);
+                this.webcamModeSelects[id] = select;
+                this.webcamPanSliders[id] = panSlider;
+            });
+        }
     }
 
     createInvertAnalysisToggle() {
@@ -261,6 +370,8 @@ export class Controls {
             opt.textContent = d.label || `Camera ${idx + 1}`;
             this.cameraSelect.appendChild(opt);
         });
+        // Update per-webcam mode dropdowns if in separate-streams mode
+        this.updateWebcamModeDropdowns(this.getSelectedCameraIds());
     }
 
     onRefreshCameras(handler) {
@@ -272,9 +383,29 @@ export class Controls {
     onCameraSelectionChange(handler) {
         if (this.cameraSelect) {
             this.cameraSelect.addEventListener('change', () => {
-                handler(this.getSelectedCameraIds());
+                const ids = this.getSelectedCameraIds();
+                handler(ids);
+                // Update per-webcam mode dropdowns if in separate-streams mode
+                this.updateWebcamModeDropdowns(ids);
             });
         }
+    }
+
+    // Get the selected mode for each webcam (id: mode)
+    getWebcamModeSelections() {
+        const result = {};
+        for (const [id, select] of Object.entries(this.webcamModeSelects || {})) {
+            result[id] = select.value;
+        }
+        return result;
+    }
+
+    getWebcamPanSelections() {
+        const result = {};
+        for (const [id, slider] of Object.entries(this.webcamPanSliders || {})) {
+            result[id] = parseFloat(slider.value);
+        }
+        return result;
     }
 
     selectCameraIds(deviceIds) {
@@ -283,6 +414,7 @@ export class Controls {
         Array.from(this.cameraSelect.options).forEach(opt => {
             opt.selected = set.has(opt.value);
         });
+        this.updateWebcamModeDropdowns(this.getSelectedCameraIds());
     }
 
     onComposeModeChange(handler) {
@@ -298,7 +430,11 @@ export class Controls {
     }
 
     setComposeModeValue(value) {
-        if (this.composeSelect) this.composeSelect.value = value;
+        if (this.composeSelect) {
+            this.composeSelect.value = value;
+            this.updateModeSelectionVisibility();
+            this.updateWebcamModeDropdowns(this.getSelectedCameraIds());
+        }
     }
 
     setInvertAnalysisChecked(checked) {

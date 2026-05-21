@@ -35,7 +35,7 @@ export class AudioManager {
         
         this.oscillator.type = 'sine';
         this.oscillator.frequency.value = 440; // default
-        this.gain.gain.value = 0.1; // low volume
+        this.gain.gain.value = 0;
         this.stereoPanner.pan.value = 0; // center
         
         this.oscillator.connect(this.gain).connect(this.stereoPanner).connect(this.audioCtx.destination);
