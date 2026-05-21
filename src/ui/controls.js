@@ -247,6 +247,7 @@ export class Controls {
         const composeMode = this.composeSelect ? this.composeSelect.value : 'average';
         const previousModes = this.getWebcamModeSelections();
         const previousPans = this.getWebcamPanSelections();
+        const defaultMode = this.modeSelect ? this.modeSelect.value : 'avg-brightness';
         // Remove old dropdowns
         this.webcamModesContainer.innerHTML = '';
         this.webcamModeSelects = {};
@@ -293,9 +294,7 @@ export class Controls {
                     select.appendChild(opt);
                 });
 
-                if (previousModes[id]) {
-                    select.value = previousModes[id];
-                }
+                select.value = previousModes[id] || defaultMode;
 
                 const panLabel = document.createElement('label');
                 panLabel.textContent = 'Pan:';
