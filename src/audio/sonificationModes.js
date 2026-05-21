@@ -5,18 +5,81 @@ const FRAME_DURATION = 1 / FRAME_RATE;
 const BUF_ATTACK = 0.005; // 5ms fade in for one-shot buffers
 const BUF_RELEASE = 0.005; // 5ms fade out
 export class SonificationModes {
-        // For Separate Streams: get audio buffer for a frame and mode
-        getAudioBufferForMode(data, mode) {
-            // Use the same logic as processFrame, but return a Float32Array buffer
-            // Only support buffer-based modes for now (frame-audio-buffer, rows-audio-buffers, etc.)
+        // For Separate Streams: convert selected mode into a per-frame audio buffer.
+        getAudioBufferForMode(data, mode, streamId = 'default') {
             let samples = null;
             switch (mode) {
                 case 'avg-brightness':
                     samples = this._samplesBrightness(data);
                     break;
+                case 'white-noise-filtering': {
+                    const w = this.canvas.width, h = this.canvas.height;
+                    const cols = new Float32Array(w);
+                    for (let x = 0; x < w; x++) {
+                        let sum = 0;
+                        for (let y = 0; y < h; y++) {
+                            const idx = (y * w + x) * 4;
+                            sum += (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+                        }
+                        cols[x] = (sum / h) / 127.5 - 1;
+                    }
+                    samples = this._samplesFromMinus1To1(cols);
+                    break;
+                }
                 case 'frame-audio-buffer':
                     samples = this._samplesBrightness(data);
                     break;
+                case 'chrominance-buffer': {
+                    const w = this.canvas.width, h = this.canvas.height, total = w * h;
+                    samples = this._downsample(total, (i) => {
+                        const idx = i * 4;
+                        return -0.168736 * data[idx] - 0.331264 * data[idx + 1] + 0.5 * data[idx + 2] + 128;
+                    }, { scale255: true });
+                    break;
+                }
+                case 'frame-diff-buffer': {
+                    if (!this._separatePrevFrames) this._separatePrevFrames = {};
+                    const w = this.canvas.width, h = this.canvas.height, total = w * h;
+                    const prev = this._separatePrevFrames[streamId];
+                    const diffVals = new Float32Array(total);
+                    if (prev) {
+                        for (let p = 0; p < total; p++) {
+                            const i = p * 4;
+                            const currGray = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                            const prevGray = (prev[i] + prev[i + 1] + prev[i + 2]) / 3;
+                            diffVals[p] = (currGray - prevGray) / 255;
+                        }
+                    }
+                    this._separatePrevFrames[streamId] = new Uint8ClampedArray(data);
+                    samples = this._samplesFromMinus1To1(diffVals);
+                    break;
+                }
+                case 'edge-detect-buffer': {
+                    const w = this.canvas.width, h = this.canvas.height, total = w * h;
+                    const gray = new Float32Array(total);
+                    for (let p = 0; p < total; p++) {
+                        const i = p * 4;
+                        gray[p] = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                    }
+                    const sobel = new Float32Array(total);
+                    const kx = [[-1,0,1],[-2,0,2],[-1,0,1]];
+                    const ky = [[-1,-2,-1],[0,0,0],[1,2,1]];
+                    for (let y = 1; y < h - 1; y++) {
+                        for (let x = 1; x < w - 1; x++) {
+                            let gx = 0, gy = 0;
+                            for (let yy = -1; yy <= 1; yy++) {
+                                for (let xx = -1; xx <= 1; xx++) {
+                                    const v = gray[(y + yy) * w + (x + xx)];
+                                    gx += kx[yy + 1][xx + 1] * v;
+                                    gy += ky[yy + 1][xx + 1] * v;
+                                }
+                            }
+                            sobel[y * w + x] = (Math.sqrt(gx * gx + gy * gy) / 255) * 2 - 1;
+                        }
+                    }
+                    samples = this._samplesFromMinus1To1(sobel);
+                    break;
+                }
                 case 'rows-audio-buffers': {
                     const w = this.canvas.width, h = this.canvas.height;
                     const L = this._getFrameSampleCount();
@@ -44,8 +107,177 @@ export class SonificationModes {
                 case 'blue-channel-buffer':
                     samples = this._samplesChannel(data, 2);
                     break;
+                case 'rgb-split-panned': {
+                    const r = this._samplesChannel(data, 0);
+                    const g = this._samplesChannel(data, 1);
+                    const b = this._samplesChannel(data, 2);
+                    const L = Math.min(r.length, g.length, b.length);
+                    samples = new Float32Array(L);
+                    for (let i = 0; i < L; i++) samples[i] = (r[i] + g[i] + b[i]) / 3;
+                    break;
+                }
+                case 'frame-buffer-loop':
+                    samples = this._samplesBrightness(data);
+                    break;
+                case 'center-region-buffer': {
+                    const regionW = Math.floor(this.canvas.width / 2);
+                    const regionH = Math.floor(this.canvas.height / 2);
+                    const startX = Math.floor(this.canvas.width / 4);
+                    const startY = Math.floor(this.canvas.height / 4);
+                    samples = this._samplesRegionBrightness(data, startX, startY, regionW, regionH);
+                    break;
+                }
+                case 'multi-frame-blend': {
+                    if (!this._separateBlendFrames) this._separateBlendFrames = {};
+                    const key = String(streamId);
+                    const frames = this._separateBlendFrames[key] || [];
+                    if (frames.length >= 5) frames.shift();
+                    frames.push(new Uint8ClampedArray(data));
+                    this._separateBlendFrames[key] = frames;
+                    const w = this.canvas.width, h = this.canvas.height, total = w * h;
+                    const L = this._getFrameSampleCount();
+                    this._ensureScratch(L);
+                    const out = this._scratchFrame, counts = this._scratchCounts;
+                    for (let p = 0; p < total; p++) {
+                        const bin = Math.floor(p * L / total);
+                        let sum = 0;
+                        const base = p * 4;
+                        for (let f = 0; f < frames.length; f++) {
+                            const fr = frames[f];
+                            sum += (fr[base] + fr[base + 1] + fr[base + 2]) / 3;
+                        }
+                        out[bin] += sum / Math.max(1, frames.length);
+                        counts[bin]++;
+                    }
+                    for (let i = 0; i < L; i++) out[i] = counts[i] ? (out[i] / counts[i]) / 127.5 - 1 : 0;
+                    samples = Float32Array.from(out);
+                    break;
+                }
+                case 'chrominance-3frame-buffer':
+                case 'chrominance-3frame-buffer-old': {
+                    if (!this._separateChromCycle) this._separateChromCycle = {};
+                    const cycle = this._separateChromCycle[streamId] || 0;
+                    const ordered = mode === 'chrominance-3frame-buffer'
+                        ? [0, 1, 2]
+                        : [2, 1, 0];
+                    const chan = ordered[cycle % 3];
+                    this._separateChromCycle[streamId] = (cycle + 1) % 3;
+                    samples = this._samplesChannel(data, chan);
+                    break;
+                }
+                case 'harmonic-series': {
+                    const L = this._getFrameSampleCount();
+                    const out = new Float32Array(L);
+                    let sum = 0;
+                    for (let i = 0; i < data.length; i += 4) sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+                    const avg = sum / (data.length / 4);
+                    const baseFreq = 220 + (avg / 255) * 660;
+                    const harmonics = Math.floor(1 + (avg / 255) * 8);
+                    for (let i = 0; i < L; i++) {
+                        const t = i / this.audioCtx.sampleRate;
+                        let v = 0;
+                        for (let h = 1; h <= harmonics; h++) v += Math.sin(2 * Math.PI * baseFreq * h * t) / h;
+                        out[i] = v / harmonics;
+                    }
+                    samples = out;
+                    break;
+                }
+                case 'granular': {
+                    const L = this._getFrameSampleCount();
+                    const out = new Float32Array(L);
+                    const bright = this._samplesBrightness(data);
+                    for (let i = 0; i < L; i++) {
+                        const gate = Math.max(0, bright[i]);
+                        out[i] = (Math.random() * 2 - 1) * gate;
+                    }
+                    samples = out;
+                    break;
+                }
+                case 'spectral': {
+                    const L = this._getFrameSampleCount();
+                    const out = new Float32Array(L);
+                    const bins = 32;
+                    for (let b = 0; b < bins; b++) {
+                        const idx = Math.floor((b / bins) * (data.length - 4));
+                        const mag = ((data[idx] + data[idx + 1] + data[idx + 2]) / 3) / 255;
+                        const f = 80 + (b / bins) * 4000;
+                        for (let i = 0; i < L; i++) {
+                            const t = i / this.audioCtx.sampleRate;
+                            out[i] += Math.sin(2 * Math.PI * f * t) * mag * (1 / bins);
+                        }
+                    }
+                    samples = out;
+                    break;
+                }
+                case 'midi-like': {
+                    const scale = [261.63, 294.33, 327.04, 348.84, 392.45, 436.05, 490.56, 523.26];
+                    let sum = 0;
+                    for (let i = 0; i < data.length; i += 4) sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+                    const avg = sum / (data.length / 4);
+                    const note = scale[Math.floor((avg / 255) * (scale.length - 1))];
+                    const L = this._getFrameSampleCount();
+                    const out = new Float32Array(L);
+                    for (let i = 0; i < L; i++) {
+                        const t = i / this.audioCtx.sampleRate;
+                        out[i] = Math.sin(2 * Math.PI * note * t) * 0.6;
+                    }
+                    samples = out;
+                    break;
+                }
+                case 'particle-system': {
+                    const L = this._getFrameSampleCount();
+                    const out = new Float32Array(L);
+                    for (let i = 0; i < L; i++) {
+                        const hit = Math.random() < 0.08 ? 1 : 0;
+                        out[i] = hit ? (Math.random() * 2 - 1) : 0;
+                    }
+                    samples = out;
+                    break;
+                }
+                case 'cross-modal': {
+                    const centerX = Math.floor(this.canvas.width / 2);
+                    const centerY = Math.floor(this.canvas.height / 2);
+                    const idx = (centerY * this.canvas.width + centerX) * 4;
+                    const r = data[idx] / 255;
+                    const g = data[idx + 1] / 255;
+                    const b = data[idx + 2] / 255;
+                    const f1 = 110 + r * 880;
+                    const f2 = 220 + g * 440;
+                    const amp = 0.2 + b * 0.4;
+                    const L = this._getFrameSampleCount();
+                    const out = new Float32Array(L);
+                    for (let i = 0; i < L; i++) {
+                        const t = i / this.audioCtx.sampleRate;
+                        out[i] = (Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t)) * 0.5 * amp;
+                    }
+                    samples = out;
+                    break;
+                }
+                case 'column-row-sine-bank': {
+                    const w = this.canvas.width, h = this.canvas.height;
+                    const rows = 64;
+                    const L = this._getFrameSampleCount();
+                    const out = new Float32Array(L);
+                    for (let r = 0; r < rows; r++) {
+                        const y = Math.floor(r * h / rows);
+                        let rowSum = 0;
+                        const base = y * w * 4;
+                        for (let x = 0; x < w; x++) {
+                            const i = base + x * 4;
+                            rowSum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+                        }
+                        const norm = (rowSum / w) / 255;
+                        const freq = 50 + (r / (rows - 1)) * 9950;
+                        for (let i = 0; i < L; i++) {
+                            const t = i / this.audioCtx.sampleRate;
+                            out[i] += Math.sin(2 * Math.PI * freq * t) * norm * (1 / rows);
+                        }
+                    }
+                    samples = out;
+                    break;
+                }
                 default:
-                    // Fallback: use avg-brightness
+                    // Fallback should still produce audible, mode-varying output.
                     samples = this._samplesBrightness(data);
             }
             // Return a copy to avoid mutation

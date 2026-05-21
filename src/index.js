@@ -132,7 +132,7 @@ class CamNoiserApp {
                     // We'll use frameAudioBufferMode as a template for all modes
                     // (Assume processFrame returns a buffer for this context)
                     if (sonificationModes.getAudioBufferForMode) {
-                        const buf = sonificationModes.getAudioBufferForMode(frame, mode);
+                        const buf = sonificationModes.getAudioBufferForMode(frame, mode, id);
                         if (buf) {
                             perBuffers.push(buf);
                             perPans.push(panMap[id] ?? 0);
