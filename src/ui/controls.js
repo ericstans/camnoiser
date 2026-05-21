@@ -1,6 +1,34 @@
 // UI Controls Module
 // Handles creation and management of all UI control elements
 
+const ALL_MODES = [
+    { value: 'avg-brightness', text: 'Avg Brightness to Pitch' },
+    { value: 'white-noise-filtering', text: 'White Noise Filtering' },
+    { value: 'frame-audio-buffer', text: 'Frame as Audio Buffer' },
+    { value: 'rows-audio-buffers', text: 'Rows as Audio Buffers' },
+    { value: 'column-row-sine-bank', text: 'Column->Row Sine Bank' },
+    { value: 'red-channel-buffer', text: 'Red Channel Only' },
+    { value: 'green-channel-buffer', text: 'Green Channel Only' },
+    { value: 'blue-channel-buffer', text: 'Blue Channel Only' },
+    { value: 'rgb-split-panned', text: 'RGB Split Panned' },
+    { value: 'frame-buffer-loop', text: 'Frame Buffer Loop' },
+    { value: 'center-region-buffer', text: 'Center Region Only' },
+    { value: 'multi-frame-blend', text: 'Multi-frame Blend' },
+    { value: 'chrominance-buffer', text: 'Chrominance as Audio Buffer' },
+    { value: 'chrominance-3frame-buffer', text: 'Chrominance 3-Frame Cycle' },
+    { value: 'chrominance-3frame-buffer-old', text: 'Chrominance 3-Frame Cycle (Old)' },
+    { value: 'frame-diff-buffer', text: 'Frame Difference Buffer' },
+    { value: 'edge-detect-buffer', text: 'Edge Detection Buffer' },
+    { value: 'harmonic-series', text: 'Harmonic Series' },
+    { value: 'granular', text: 'Granular Synthesis' },
+    { value: 'spectral', text: 'Spectral Analysis' },
+    { value: 'midi-like', text: 'MIDI-like Musical' },
+    { value: 'particle-system', text: 'Particle System' },
+    { value: 'cross-modal', text: 'Cross-Modal Mapping' },
+];
+
+const MODES_STORAGE_KEY = 'camnoiser-enabled-modes';
+
 export class Controls {
     constructor(audioManager, sonificationModes) {
         this.controlsDiv = null;
@@ -19,6 +47,159 @@ export class Controls {
         this.invertAnalysisLabel = null;
         this.hotkeysBound = false;
         this.hotkeyHandler = null;
+        this.enabledModes = this._loadEnabledModes();
+    }
+
+    _loadEnabledModes() {
+        try {
+            const stored = localStorage.getItem(MODES_STORAGE_KEY);
+            if (stored) {
+                const saved = new Set(JSON.parse(stored));
+                // Keep only values still present in ALL_MODES; re-add any new ones
+                const result = new Set(ALL_MODES.map(m => m.value).filter(v => saved.has(v)));
+                // If nothing survived (e.g. empty save), fall back to all
+                return result.size > 0 ? result : new Set(ALL_MODES.map(m => m.value));
+            }
+        } catch (e) { /* ignore corrupt storage */ }
+        return new Set(ALL_MODES.map(m => m.value));
+    }
+
+    _saveEnabledModes() {
+        try {
+            localStorage.setItem(MODES_STORAGE_KEY, JSON.stringify([...this.enabledModes]));
+        } catch (e) { /* ignore */ }
+    }
+
+    _getActiveModeOptions() {
+        return ALL_MODES.filter(m => this.enabledModes.has(m.value));
+    }
+
+    _populateSelect(selectEl, activeOptions, currentValue) {
+        selectEl.innerHTML = '';
+        activeOptions.forEach(option => {
+            const opt = document.createElement('option');
+            opt.value = option.value;
+            opt.textContent = option.text;
+            selectEl.appendChild(opt);
+        });
+        // Restore previous value, fall back to first option
+        if (currentValue && activeOptions.some(o => o.value === currentValue)) {
+            selectEl.value = currentValue;
+        } else if (activeOptions.length > 0) {
+            selectEl.value = activeOptions[0].value;
+        }
+    }
+
+    _rebuildAllModeSelects() {
+        const activeOptions = this._getActiveModeOptions();
+        // Rebuild global mode select
+        if (this.modeSelect) {
+            const current = this.modeSelect.value;
+            this._populateSelect(this.modeSelect, activeOptions, current);
+            this.modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        // Rebuild per-webcam selects
+        for (const [id, sel] of Object.entries(this.webcamModeSelects || {})) {
+            const current = sel.value;
+            this._populateSelect(sel, activeOptions, current);
+        }
+    }
+
+    openEditModesModal() {
+        // Remove any existing modal
+        const existing = document.getElementById('edit-modes-modal-overlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'edit-modes-modal-overlay';
+        overlay.className = 'modal-overlay';
+
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Edit Modes';
+        title.className = 'modal-title';
+        modal.appendChild(title);
+
+        const desc = document.createElement('p');
+        desc.className = 'modal-desc';
+        desc.textContent = 'Uncheck modes to hide them from all dropdowns.';
+        modal.appendChild(desc);
+
+        const list = document.createElement('div');
+        list.className = 'modal-mode-list';
+
+        const checkboxes = new Map();
+        ALL_MODES.forEach(mode => {
+            const item = document.createElement('label');
+            item.className = 'modal-mode-item';
+
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.value = mode.value;
+            cb.checked = this.enabledModes.has(mode.value);
+            checkboxes.set(mode.value, cb);
+
+            item.appendChild(cb);
+            item.appendChild(document.createTextNode(' ' + mode.text));
+            list.appendChild(item);
+        });
+        modal.appendChild(list);
+
+        const btnRow = document.createElement('div');
+        btnRow.className = 'modal-btn-row';
+
+        const selectAll = document.createElement('button');
+        selectAll.textContent = 'Select All';
+        selectAll.type = 'button';
+        selectAll.className = 'modal-btn-secondary';
+        selectAll.addEventListener('click', () => {
+            checkboxes.forEach(cb => { cb.checked = true; });
+        });
+
+        const applyBtn = document.createElement('button');
+        applyBtn.textContent = 'Apply';
+        applyBtn.type = 'button';
+        applyBtn.className = 'modal-btn-primary';
+        applyBtn.addEventListener('click', () => {
+            const newEnabled = new Set();
+            checkboxes.forEach((cb, value) => {
+                if (cb.checked) newEnabled.add(value);
+            });
+            // Require at least one mode enabled
+            if (newEnabled.size === 0) {
+                ALL_MODES.forEach(m => newEnabled.add(m.value));
+            }
+            this.enabledModes = newEnabled;
+            this._saveEnabledModes();
+            this._rebuildAllModeSelects();
+            overlay.remove();
+        });
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'modal-btn-secondary';
+        cancelBtn.addEventListener('click', () => overlay.remove());
+
+        btnRow.appendChild(selectAll);
+        btnRow.appendChild(cancelBtn);
+        btnRow.appendChild(applyBtn);
+        modal.appendChild(btnRow);
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        // Close on overlay click outside modal
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.remove();
+        });
+        // Close on Escape
+        const escHandler = (e) => {
+            if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); }
+        };
+        document.addEventListener('keydown', escHandler);
     }
 
     createControls() {
@@ -70,54 +251,23 @@ export class Controls {
     }
 
     createModeSelection() {
-        // Create mode label
         this.modeLabel = document.createElement('label');
         this.modeLabel.textContent = 'Mode: ';
 
-        // Create mode select dropdown
         this.modeSelect = document.createElement('select');
+        this._populateSelect(this.modeSelect, this._getActiveModeOptions(), null);
 
-        // Define all mode options
-        const modeOptions = [
-            { value: 'avg-brightness', text: 'Avg Brightness to Pitch' },
-            { value: 'white-noise-filtering', text: 'White Noise Filtering' },
-            { value: 'frame-audio-buffer', text: 'Frame as Audio Buffer' },
-            { value: 'rows-audio-buffers', text: 'Rows as Audio Buffers' },
-            { value: 'column-row-sine-bank', text: 'Column->Row Sine Bank' },
-            { value: 'red-channel-buffer', text: 'Red Channel Only' },
-            { value: 'green-channel-buffer', text: 'Green Channel Only' },
-            { value: 'blue-channel-buffer', text: 'Blue Channel Only' },
-            { value: 'rgb-split-panned', text: 'RGB Split Panned' },
-            { value: 'frame-buffer-loop', text: 'Frame Buffer Loop' },
-            { value: 'center-region-buffer', text: 'Center Region Only' },
-            { value: 'multi-frame-blend', text: 'Multi-frame Blend' },
-            { value: 'chrominance-buffer', text: 'Chrominance as Audio Buffer' },
-            { value: 'chrominance-3frame-buffer', text: 'Chrominance 3-Frame Cycle' },
-            { value: 'chrominance-3frame-buffer-old', text: 'Chrominance 3-Frame Cycle (Old)' },
-            { value: 'frame-diff-buffer', text: 'Frame Difference Buffer' },
-            { value: 'edge-detect-buffer', text: 'Edge Detection Buffer' },
-            { value: 'harmonic-series', text: 'Harmonic Series' },
-            { value: 'granular', text: 'Granular Synthesis' },
-            { value: 'spectral', text: 'Spectral Analysis' },
-            { value: 'midi-like', text: 'MIDI-like Musical' },
-            { value: 'particle-system', text: 'Particle System' },
-            { value: 'cross-modal', text: 'Cross-Modal Mapping' }
-        ];
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Edit Modes';
+        editBtn.type = 'button';
+        editBtn.className = 'edit-modes-btn';
+        editBtn.addEventListener('click', () => this.openEditModesModal());
 
-        // Create and append all mode options
-        modeOptions.forEach(option => {
-            const modeOption = document.createElement('option');
-            modeOption.value = option.value;
-            modeOption.textContent = option.text;
-            this.modeSelect.appendChild(modeOption);
-        });
-
-        // Append mode selection to controls
         this.modeRow = document.createElement('div');
         this.modeRow.className = 'control-row';
-        this.modeLabel.appendChild(this.modeSelect);
         this.modeRow.appendChild(this.modeLabel);
         this.modeRow.appendChild(this.modeSelect);
+        this.modeRow.appendChild(editBtn);
         this.controlsDiv.appendChild(this.modeRow);
     }
 
@@ -253,32 +403,7 @@ export class Controls {
         this.webcamModeSelects = {};
         this.webcamPanSliders = {};
         if (composeMode === 'separate-streams' && Array.isArray(webcamIds) && webcamIds.length > 0) {
-            // Limit to 10 webcams
-            const modeOptions = [
-                { value: 'avg-brightness', text: 'Avg Brightness to Pitch' },
-                { value: 'white-noise-filtering', text: 'White Noise Filtering' },
-                { value: 'frame-audio-buffer', text: 'Frame as Audio Buffer' },
-                { value: 'rows-audio-buffers', text: 'Rows as Audio Buffers' },
-                { value: 'column-row-sine-bank', text: 'Column->Row Sine Bank' },
-                { value: 'red-channel-buffer', text: 'Red Channel Only' },
-                { value: 'green-channel-buffer', text: 'Green Channel Only' },
-                { value: 'blue-channel-buffer', text: 'Blue Channel Only' },
-                { value: 'rgb-split-panned', text: 'RGB Split Panned' },
-                { value: 'frame-buffer-loop', text: 'Frame Buffer Loop' },
-                { value: 'center-region-buffer', text: 'Center Region Only' },
-                { value: 'multi-frame-blend', text: 'Multi-frame Blend' },
-                { value: 'chrominance-buffer', text: 'Chrominance as Audio Buffer' },
-                { value: 'chrominance-3frame-buffer', text: 'Chrominance 3-Frame Cycle' },
-                { value: 'chrominance-3frame-buffer-old', text: 'Chrominance 3-Frame Cycle (Old)' },
-                { value: 'frame-diff-buffer', text: 'Frame Difference Buffer' },
-                { value: 'edge-detect-buffer', text: 'Edge Detection Buffer' },
-                { value: 'harmonic-series', text: 'Harmonic Series' },
-                { value: 'granular', text: 'Granular Synthesis' },
-                { value: 'spectral', text: 'Spectral Analysis' },
-                { value: 'midi-like', text: 'MIDI-like Musical' },
-                { value: 'particle-system', text: 'Particle System' },
-                { value: 'cross-modal', text: 'Cross-Modal Mapping' }
-            ];
+            const modeOptions = this._getActiveModeOptions();
             webcamIds.slice(0, 10).forEach((id, idx) => {
                 const row = document.createElement('div');
                 row.className = 'webcam-mode-row';
@@ -287,14 +412,7 @@ export class Controls {
                 label.textContent = `Webcam ${idx + 1} Mode:`;
 
                 const select = document.createElement('select');
-                modeOptions.forEach(option => {
-                    const opt = document.createElement('option');
-                    opt.value = option.value;
-                    opt.textContent = option.text;
-                    select.appendChild(opt);
-                });
-
-                select.value = previousModes[id] || defaultMode;
+                this._populateSelect(select, modeOptions, previousModes[id] || defaultMode);
 
                 const panLabel = document.createElement('label');
                 panLabel.textContent = 'Pan:';
