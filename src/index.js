@@ -41,6 +41,10 @@ class CamNoiserApp {
 
             // Setup event listeners
             this.controls.setupEventListeners();
+            this.sonificationModes.setCrossfadeTimeMs(this.controls.getCrossfadeMs());
+            this.controls.onCrossfadeChange((ms) => {
+                this.sonificationModes.setCrossfadeTimeMs(ms);
+            });
 
             // Populate and wire camera selection
             await this.populateCameras();

@@ -13,6 +13,7 @@ export class MultiCameraManager {
         this.permissionPrimed = false;
         this.composeMode = 'average'; // 'average' | 'side-by-side' | 'sum' | 'sum-normalize'
         this.invertAnalysis = false;
+        this.videoManagerMap = new Map(); // deviceId -> { vm, containerEl }
     }
 
     createVideosContainer() {
@@ -98,34 +99,68 @@ export class MultiCameraManager {
     }
 
     async setSelectedDevices(deviceIds) {
-        // Stop existing
-        this.stopAll();
-        this.clearVideos();
         this.setAnalysisVisible(Array.isArray(deviceIds) && deviceIds.length > 1);
         if (this.container && this.analysisContainer) {
             this.container.appendChild(this.analysisContainer);
         }
+
         if (!deviceIds || deviceIds.length === 0) {
+            this.stopAll();
+            this.clearVideos();
             return;
         }
 
-        // Create a VideoManager per device
-        const startPromises = deviceIds.map(async (id) => {
-            const vm = new VideoManager();
-            const el = vm.createVideoElement();
-            if (this.container) {
+        const newIdSet = new Set(deviceIds);
+
+        // Stop and remove VMs for devices no longer selected
+        const toRemove = [];
+        for (const id of this.videoManagerMap.keys()) {
+            if (!newIdSet.has(id)) toRemove.push(id);
+        }
+        for (const id of toRemove) {
+            const entry = this.videoManagerMap.get(id);
+            entry.vm.stopWebcam();
+            if (entry.containerEl && entry.containerEl.parentElement === this.container) {
+                this.container.removeChild(entry.containerEl);
+            }
+            this.videoManagerMap.delete(id);
+        }
+
+        // Start new VMs only for newly added devices
+        const addPromises = [];
+        for (const id of deviceIds) {
+            if (!this.videoManagerMap.has(id)) {
+                addPromises.push((async () => {
+                    const vm = new VideoManager();
+                    const containerEl = vm.createVideoElement();
+                    if (this.container) {
+                        if (this.analysisContainer && this.analysisContainer.parentElement === this.container) {
+                            this.container.insertBefore(containerEl, this.analysisContainer);
+                        } else {
+                            this.container.appendChild(containerEl);
+                        }
+                    }
+                    vm.createCanvas();
+                    await vm.requestWebcamAccess(id, CANVAS_WIDTH, CANVAS_HEIGHT);
+                    await vm.startVideo();
+                    this.videoManagerMap.set(id, { vm, containerEl });
+                })());
+            }
+        }
+        await Promise.all(addPromises);
+
+        // Rebuild ordered array and fix DOM order to match deviceIds
+        this.videoManagers = deviceIds.map(id => this.videoManagerMap.get(id)?.vm).filter(Boolean);
+        for (const id of deviceIds) {
+            const entry = this.videoManagerMap.get(id);
+            if (entry?.containerEl && this.container) {
                 if (this.analysisContainer && this.analysisContainer.parentElement === this.container) {
-                    this.container.insertBefore(el, this.analysisContainer);
+                    this.container.insertBefore(entry.containerEl, this.analysisContainer);
                 } else {
-                    this.container.appendChild(el);
+                    this.container.appendChild(entry.containerEl);
                 }
             }
-            vm.createCanvas(); // hidden per-camera canvas for capture downscaled
-            await vm.requestWebcamAccess(id, CANVAS_WIDTH, CANVAS_HEIGHT);
-            await vm.startVideo();
-            this.videoManagers.push(vm);
-        });
-        await Promise.all(startPromises);
+        }
     }
 
     clearVideos() {
@@ -141,6 +176,7 @@ export class MultiCameraManager {
             }
         }
         this.videoManagers = [];
+        this.videoManagerMap = new Map();
     }
 
     stopAll() {

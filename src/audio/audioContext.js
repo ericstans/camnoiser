@@ -16,6 +16,7 @@ export class AudioManager {
         this.numBands = canvasWidth;
         this.minFreq = 50;
         this.maxFreq = 20000;
+        this.outputGain = null;
         
         this.initializeAudioContext();
         this.setupOscillator();
@@ -25,6 +26,9 @@ export class AudioManager {
 
     initializeAudioContext() {
         this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        this.outputGain = this.audioCtx.createGain();
+        this.outputGain.gain.value = 1;
+        this.outputGain.connect(this.audioCtx.destination);
     }
 
     setupOscillator() {
@@ -38,7 +42,7 @@ export class AudioManager {
         this.gain.gain.value = 0;
         this.stereoPanner.pan.value = 0; // center
         
-        this.oscillator.connect(this.gain).connect(this.stereoPanner).connect(this.audioCtx.destination);
+        this.oscillator.connect(this.gain).connect(this.stereoPanner).connect(this.outputGain);
         this.oscillator.start();
     }
 
@@ -71,7 +75,7 @@ export class AudioManager {
             const bandPanner = this.audioCtx.createStereoPanner();
             bandPanner.pan.value = 0; // center by default
             
-            this.noiseSource.connect(filter).connect(bandGain).connect(bandPanner).connect(this.audioCtx.destination);
+            this.noiseSource.connect(filter).connect(bandGain).connect(bandPanner).connect(this.outputGain);
             this.bandFilters.push(filter);
             this.bandGains.push(bandGain);
             this.bandPanners.push(bandPanner);
@@ -102,6 +106,10 @@ export class AudioManager {
 
     getNoiseSource() {
         return this.noiseSource;
+    }
+
+    getOutputNode() {
+        return this.outputGain || this.audioCtx.destination;
     }
 
     getBandGains() {

@@ -37,6 +37,8 @@ export class Controls {
         this.modeLabel = null;
         this.panSlider = null;
         this.panLabel = null;
+        this.crossfadeSlider = null;
+        this.crossfadeLabel = null;
         this.audioStarted = false;
         this.audioManager = audioManager;
         this.sonificationModes = sonificationModes;
@@ -221,6 +223,9 @@ export class Controls {
 
         // Create panning slider
         this.createPanningSlider();
+
+        // Create global crossfade slider
+        this.createCrossfadeSlider();
         
         // Create start button
         this.createStartButton();
@@ -385,6 +390,37 @@ export class Controls {
         });
 
         this.updateModeSelectionVisibility();
+    }
+
+    createCrossfadeSlider() {
+        this.crossfadeLabel = document.createElement('label');
+        this.crossfadeLabel.textContent = 'Crossfade Time: ';
+        this.crossfadeLabel.setAttribute('for', 'crossfade-slider');
+
+        this.crossfadeSlider = document.createElement('input');
+        this.crossfadeSlider.type = 'range';
+        this.crossfadeSlider.id = 'crossfade-slider';
+        this.crossfadeSlider.min = '0';
+        this.crossfadeSlider.max = '10000';
+        this.crossfadeSlider.step = '10';
+        this.crossfadeSlider.value = '0';
+        this.crossfadeSlider.className = 'pan-slider';
+
+        const crossfadeValue = document.createElement('span');
+        crossfadeValue.textContent = '0ms';
+        crossfadeValue.className = 'pan-value';
+
+        this.crossfadeSlider.addEventListener('input', () => {
+            const ms = parseInt(this.crossfadeSlider.value, 10) || 0;
+            crossfadeValue.textContent = `${ms}ms`;
+        });
+
+        const row = document.createElement('div');
+        row.className = 'control-row';
+        row.appendChild(this.crossfadeLabel);
+        row.appendChild(this.crossfadeSlider);
+        row.appendChild(crossfadeValue);
+        this.controlsDiv.appendChild(row);
     }
 
     updateModeSelectionVisibility() {
@@ -568,6 +604,18 @@ export class Controls {
 
     getPanSlider() {
         return this.panSlider;
+    }
+
+    getCrossfadeMs() {
+        if (!this.crossfadeSlider) return 0;
+        return parseInt(this.crossfadeSlider.value, 10) || 0;
+    }
+
+    onCrossfadeChange(handler) {
+        if (!this.crossfadeSlider) return;
+        this.crossfadeSlider.addEventListener('input', () => {
+            handler(this.getCrossfadeMs());
+        });
     }
 
     cycleMode(delta) {

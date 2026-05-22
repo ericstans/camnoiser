@@ -6,7 +6,43 @@ const BUF_ATTACK = 0.005; // 5ms fade in for one-shot buffers
 const BUF_RELEASE = 0.005; // 5ms fade out
 export class SonificationModes {
         // For Separate Streams: convert selected mode into a per-frame audio buffer.
-        getAudioBufferForMode(data, mode, streamId = 'default') {
+        getAudioBufferForMode(data, mode, streamId = 'default', options = {}) {
+            const disableTransition = !!options.disableTransition;
+            const streamKey = String(streamId);
+
+            if (!disableTransition) {
+                const now = this.audioCtx.currentTime;
+                const prev = this.lastModeByStream[streamKey];
+                if (this.crossfadeTimeMs > 0 && prev && prev !== mode) {
+                    const duration = this.crossfadeTimeMs / 1000;
+                    this.streamTransitions[streamKey] = {
+                        from: prev,
+                        to: mode,
+                        startTime: now,
+                        endTime: now + duration
+                    };
+                }
+                this.lastModeByStream[streamKey] = mode;
+
+                const transition = this.streamTransitions[streamKey];
+                if (transition && transition.to === mode) {
+                    const total = Math.max(0.0001, transition.endTime - transition.startTime);
+                    const progress = Math.max(0, Math.min(1, (now - transition.startTime) / total));
+                    if (progress < 1) {
+                        const blended = this._buildCrossfadeSamples(
+                            data,
+                            transition.from,
+                            transition.to,
+                            progress,
+                            `stream:${streamKey}`
+                        );
+                        if (blended) return blended;
+                    } else {
+                        delete this.streamTransitions[streamKey];
+                    }
+                }
+            }
+
             let samples = null;
             switch (mode) {
                 case 'avg-brightness':
@@ -284,6 +320,50 @@ export class SonificationModes {
             return samples ? Float32Array.from(samples) : null;
         }
 
+        _blendSampleBuffers(fromSamples, toSamples, progress) {
+            if (!fromSamples && !toSamples) return null;
+            if (!fromSamples) return toSamples ? Float32Array.from(toSamples) : null;
+            if (!toSamples) return fromSamples ? Float32Array.from(fromSamples) : null;
+
+            const len = Math.min(fromSamples.length, toSamples.length);
+            if (!len || len <= 0) return null;
+
+            const out = new Float32Array(len);
+            const a = Math.max(0, Math.min(1, progress));
+            const inv = 1 - a;
+            for (let i = 0; i < len; i++) {
+                out[i] = fromSamples[i] * inv + toSamples[i] * a;
+            }
+            return out;
+        }
+
+        _scaleSamples(samples, gain) {
+            if (!samples) return null;
+            const len = samples.length;
+            if (!len || len <= 0) return null;
+            const g = Math.max(0, Math.min(1, gain));
+            if (g === 1) return Float32Array.from(samples);
+            const out = new Float32Array(len);
+            for (let i = 0; i < len; i++) out[i] = samples[i] * g;
+            return out;
+        }
+
+        _buildCrossfadeSamples(data, fromMode, toMode, progress, streamKey = 'default') {
+            const fromSamples = this.getAudioBufferForMode(
+                data,
+                fromMode,
+                `${streamKey}:from`,
+                { disableTransition: true }
+            );
+            const toSamples = this.getAudioBufferForMode(
+                data,
+                toMode,
+                `${streamKey}:to`,
+                { disableTransition: true }
+            );
+            return this._blendSampleBuffers(fromSamples, toSamples, progress);
+        }
+
         // For Separate Streams: play a mixed buffer (Float32Array)
         playMixedBuffer(buffer) {
             if (!buffer || !buffer.length) return;
@@ -291,7 +371,7 @@ export class SonificationModes {
             audioBuffer.copyToChannel(buffer, 0, 0);
             const src = this.audioManager.createBufferSource();
             src.buffer = audioBuffer;
-            src.connect(this.audioCtx.destination);
+            src.connect(this._getOutputNode());
             src.start();
         }
 
@@ -313,7 +393,7 @@ export class SonificationModes {
             // Keep mix energy in check as stream count grows.
             mixGain.gain.value = 1 / Math.max(1, buffers.length);
 
-            mixGain.connect(globalPanner).connect(this.audioCtx.destination);
+            mixGain.connect(globalPanner).connect(this._getOutputNode());
 
             for (let i = 0; i < buffers.length; i++) {
                 const raw = buffers[i];
@@ -321,17 +401,6 @@ export class SonificationModes {
 
                 const truncated = new Float32Array(minLen);
                 truncated.set(raw.subarray(0, minLen));
-
-                // Normalize each stream before combining.
-                let max = 0;
-                for (let s = 0; s < truncated.length; s++) {
-                    max = Math.max(max, Math.abs(truncated[s]));
-                }
-                if (max > 0) {
-                    for (let s = 0; s < truncated.length; s++) {
-                        truncated[s] /= max;
-                    }
-                }
 
                 const bufferNode = this._createBufferFromSamples(truncated);
                 const streamPanner = this.audioCtx.createStereoPanner();
@@ -349,6 +418,16 @@ export class SonificationModes {
         this.oscillator = audioManager.getOscillator();
         this.gain = audioManager.getGain();
         this.bandGains = audioManager.getBandGains();
+        this.outputNode = audioManager.getOutputNode ? audioManager.getOutputNode() : this.audioCtx.destination;
+
+        this.crossfadeTimeMs = 0;
+        this.lastMode = null;
+        this.lastModeByStream = {};
+        this.streamTransitions = {};
+        this.singleTransition = null;
+        this.crossfadeGain = this.audioCtx.createGain();
+        this.crossfadeGain.gain.value = 1;
+        this.crossfadeGain.connect(this.outputNode);
 
         // For multi-frame blend mode
         this.blendFrameCount = 5;
@@ -357,6 +436,42 @@ export class SonificationModes {
         // For frame/row audio buffer playback
         this.lastFrameBufferSource = null;
         this.lastRowBufferSources = [];
+    }
+
+    setCrossfadeTimeMs(ms) {
+        const parsed = Number(ms);
+        const clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(10000, parsed)) : 0;
+        this.crossfadeTimeMs = clamped;
+        if (clamped <= 0) {
+            this.streamTransitions = {};
+            this.singleTransition = null;
+        }
+    }
+
+    _fadeLegacyVoicesOut(durationSecs) {
+        const now = this.audioCtx.currentTime;
+        const end = now + Math.max(0.001, durationSecs);
+
+        const mainGain = this.gain && this.gain.gain;
+        if (mainGain) {
+            if (mainGain.cancelAndHoldAtTime) mainGain.cancelAndHoldAtTime(now);
+            else mainGain.cancelScheduledValues(now);
+            mainGain.setValueAtTime(mainGain.value, now);
+            mainGain.linearRampToValueAtTime(0, end);
+        }
+
+        for (let i = 0; i < this.bandGains.length; i++) {
+            const g = this.bandGains[i] && this.bandGains[i].gain;
+            if (!g) continue;
+            if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(now);
+            else g.cancelScheduledValues(now);
+            g.setValueAtTime(g.value, now);
+            g.linearRampToValueAtTime(0, end);
+        }
+    }
+
+    _getOutputNode() {
+        return this.crossfadeGain || this.outputNode || this.audioCtx.destination;
     }
 
     // ---------------- Frame-duration sample helpers ----------------
@@ -442,7 +557,7 @@ export class SonificationModes {
         gain.gain.setValueAtTime(1, sustainEnd);
         gain.gain.linearRampToValueAtTime(0, startTime + duration);
 
-        src.connect(gain).connect(targetNode || this.audioCtx.destination);
+        src.connect(gain).connect(targetNode || this._getOutputNode());
         src.start(startTime);
         // Stop slightly after envelope ends to ensure cleanup
         src.stop(startTime + duration);
@@ -580,7 +695,7 @@ export class SonificationModes {
         const samples = this._samplesBrightness(data);
         const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -606,7 +721,7 @@ export class SonificationModes {
             for (let i = 0; i < perRow && (start + i) < L; i++) scratch[start + i] = avg;
         }
         const buffer = this._createBufferFromSamples(scratch);
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
         this.lastRowBufferSources.push(src);
     }
 
@@ -618,7 +733,7 @@ export class SonificationModes {
         const samples = this._samplesChannel(data, 0);
         const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -630,7 +745,7 @@ export class SonificationModes {
         const samples = this._samplesChannel(data, 1);
         const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -642,7 +757,7 @@ export class SonificationModes {
         const samples = this._samplesChannel(data, 2);
         const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -665,9 +780,9 @@ export class SonificationModes {
         const redSrc = this._scheduleOneShot(rBuf, redPanner, { startTime: now, duration: FRAME_DURATION });
         const greenSrc = this._scheduleOneShot(gBuf, greenPanner, { startTime: now, duration: FRAME_DURATION });
         const blueSrc = this._scheduleOneShot(bBuf, bluePanner, { startTime: now, duration: FRAME_DURATION });
-        redPanner.connect(this.audioCtx.destination);
-        greenPanner.connect(this.audioCtx.destination);
-        bluePanner.connect(this.audioCtx.destination);
+        redPanner.connect(this._getOutputNode());
+        greenPanner.connect(this._getOutputNode());
+        bluePanner.connect(this._getOutputNode());
         this.lastRowBufferSources.push(redSrc, greenSrc, blueSrc);
     }
 
@@ -681,7 +796,7 @@ export class SonificationModes {
         this.stopFrameBufferPlayback();
         const now = this.audioCtx.currentTime;
         const duration = 0.5; // maintain loop feature
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { startTime: now, duration, loop: true });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { startTime: now, duration, loop: true });
         this.lastFrameBufferSource = src;
     }
 
@@ -697,7 +812,7 @@ export class SonificationModes {
         const samples = this._samplesRegionBrightness(data, startX, startY, regionW, regionH);
         const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -727,7 +842,7 @@ export class SonificationModes {
         for (let i = 0; i < L; i++) out[i] = counts[i] ? (out[i] / counts[i]) / 127.5 - 1 : 0;
         const buffer = this._createBufferFromSamples(out);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -770,7 +885,7 @@ export class SonificationModes {
             // Higher harmonics get quieter
             gain.gain.value = 0.1 / i;
 
-            osc.connect(gain).connect(this.audioCtx.destination);
+            osc.connect(gain).connect(this._getOutputNode());
             osc.start();
 
             this.harmonicOscillators.push(osc);
@@ -838,7 +953,7 @@ export class SonificationModes {
             grainGain.gain.value = Math.max(0.1, (brightness / 255) * 0.5);
 
             // Connect grain through gain to output
-            grain.connect(grainGain).connect(this.audioCtx.destination);
+            grain.connect(grainGain).connect(this._getOutputNode());
 
             // Position affects timing (ensure positive delay)
             const delay = Math.max(0, (x / this.canvas.width) * 0.1);
@@ -910,7 +1025,7 @@ export class SonificationModes {
             // Map brightness to gain
             gain.gain.value = (spectrum[i] / 255) * 0.1;
 
-            osc.connect(gain).connect(this.audioCtx.destination);
+            osc.connect(gain).connect(this._getOutputNode());
             osc.start();
 
             this.spectralOscillators.push(osc);
@@ -1004,7 +1119,7 @@ export class SonificationModes {
         gain.gain.linearRampToValueAtTime(noteGain, now + attackTime);
 
         // Sustain indefinitely (no automatic stop)
-        osc.connect(gain).connect(this.audioCtx.destination);
+        osc.connect(gain).connect(this._getOutputNode());
         osc.start(now);
 
         // Store note state
@@ -1089,7 +1204,7 @@ export class SonificationModes {
                 const panner = this.audioCtx.createStereoPanner();
                 panner.pan.value = (x / this.canvas.width) * 2 - 1;
 
-                osc.connect(gain).connect(panner).connect(this.audioCtx.destination);
+                osc.connect(gain).connect(panner).connect(this._getOutputNode());
                 osc.start();
 
                 particle.oscillator = osc;
@@ -1138,7 +1253,7 @@ export class SonificationModes {
         pitchOsc.type = 'sine';
         pitchOsc.frequency.value = 110 + (red / 255) * 880; // A2 to A5
         pitchGain.gain.value = 0.2;
-        pitchOsc.connect(pitchGain).connect(this.audioCtx.destination);
+        pitchOsc.connect(pitchGain).connect(this._getOutputNode());
         pitchOsc.start();
         this.crossModalOscillators.push(pitchOsc);
 
@@ -1148,7 +1263,7 @@ export class SonificationModes {
         timbreOsc.type = green > 128 ? 'square' : 'sawtooth';
         timbreOsc.frequency.value = 220 + (green / 255) * 440; // A3 to A4
         timbreGain.gain.value = 0.15;
-        timbreOsc.connect(timbreGain).connect(this.audioCtx.destination);
+        timbreOsc.connect(timbreGain).connect(this._getOutputNode());
         timbreOsc.start();
         this.crossModalOscillators.push(timbreOsc);
 
@@ -1172,7 +1287,7 @@ export class SonificationModes {
             beatIndex = (beatIndex + 1) % rhythmPattern.length;
         }, (60 / (blue / 255 * 120 + 60)) * 1000); // BPM based on blue value
 
-        rhythmOsc.connect(rhythmGain).connect(this.audioCtx.destination);
+        rhythmOsc.connect(rhythmGain).connect(this._getOutputNode());
         rhythmOsc.start();
         this.crossModalOscillators.push(rhythmOsc);
 
@@ -1190,7 +1305,7 @@ export class SonificationModes {
         }, { scale255: true });
         const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -1213,7 +1328,7 @@ export class SonificationModes {
         const samples = this._samplesFromMinus1To1(diffVals);
         const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -1244,7 +1359,7 @@ export class SonificationModes {
         const samples = this._samplesFromMinus1To1(sobel);
         const buffer = this._createBufferFromSamples(samples);
         this.stopFrameBufferPlayback();
-        const src = this._scheduleOneShot(buffer, this.audioCtx.destination, { duration: FRAME_DURATION });
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
         this.lastFrameBufferSource = src;
     }
 
@@ -1279,7 +1394,7 @@ export class SonificationModes {
                 osc.type = 'sine';
                 osc.frequency.value = freq;
                 gain.gain.value = 0; // start silent
-                osc.connect(gain).connect(this.audioCtx.destination);
+                osc.connect(gain).connect(this._getOutputNode());
                 osc.start();
                 this.rowSineBankOscillators.push({ osc, gain, rowY });
             }
@@ -1315,6 +1430,41 @@ export class SonificationModes {
 
     // Main method to process frame based on selected mode
     processFrame(data, mode) {
+        const now = this.audioCtx.currentTime;
+        if (this.crossfadeTimeMs > 0 && this.lastMode && this.lastMode !== mode) {
+            const duration = this.crossfadeTimeMs / 1000;
+            this.singleTransition = {
+                from: this.lastMode,
+                to: mode,
+                startTime: now,
+                endTime: now + duration
+            };
+
+            // Let old voices decay over the full crossfade instead of dropping immediately.
+            this._fadeLegacyVoicesOut(duration);
+        }
+        this.lastMode = mode;
+
+        if (this.singleTransition && this.singleTransition.to === mode) {
+            const total = Math.max(0.0001, this.singleTransition.endTime - this.singleTransition.startTime);
+            const progress = Math.max(0, Math.min(1, (now - this.singleTransition.startTime) / total));
+            if (progress < 1) {
+                const toSamples = this.getAudioBufferForMode(
+                    data,
+                    this.singleTransition.to,
+                    'single-main:to',
+                    { disableTransition: true }
+                );
+                const fadedIn = this._scaleSamples(toSamples, progress);
+                if (fadedIn) {
+                    this.playMixedBuffer(fadedIn);
+                    return;
+                }
+            } else {
+                this.singleTransition = null;
+            }
+        }
+
         switch (mode) {
             case 'avg-brightness':
                 this.avgBrightnessMode(data);

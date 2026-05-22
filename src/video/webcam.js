@@ -121,12 +121,17 @@ export class VideoManager {
         });
     }
 
-    // Method to stop the webcam stream
+    // Method to stop the webcam stream and clean up resources
     stopWebcam() {
         if (this.stream) {
             this.stream.getTracks().forEach(track => track.stop());
             this.stream = null;
         }
+        if (this.canvas && this.canvas.parentElement) {
+            this.canvas.parentElement.removeChild(this.canvas);
+        }
+        this.canvas = null;
+        this.ctx = null;
     }
 
     // Method to get current frame data from canvas
