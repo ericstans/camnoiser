@@ -14,6 +14,7 @@ export class MultiCameraManager {
         this.composeMode = 'average'; // 'average' | 'side-by-side' | 'sum' | 'sum-normalize'
         this.invertAnalysis = false;
         this.videoManagerMap = new Map(); // deviceId -> { vm, containerEl }
+        this._selectionQueue = Promise.resolve();
     }
 
     createVideosContainer() {
@@ -99,6 +100,12 @@ export class MultiCameraManager {
     }
 
     async setSelectedDevices(deviceIds) {
+        const normalizedIds = Array.from(new Set((Array.isArray(deviceIds) ? deviceIds : []).filter(Boolean)));
+        this._selectionQueue = this._selectionQueue.then(() => this._setSelectedDevicesInternal(normalizedIds));
+        return this._selectionQueue;
+    }
+
+    async _setSelectedDevicesInternal(deviceIds) {
         this.setAnalysisVisible(Array.isArray(deviceIds) && deviceIds.length > 1);
         if (this.container && this.analysisContainer) {
             this.container.appendChild(this.analysisContainer);

@@ -46,7 +46,29 @@ export class SonificationModes {
             let samples = null;
             switch (mode) {
                 case 'avg-brightness':
-                    samples = this._samplesBrightness(data);
+                    {
+                        let sum = 0;
+                        for (let i = 0; i < data.length; i += 4) {
+                            sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+                        }
+                        const avg = sum / (data.length / 4);
+                        const minFreq = 220;
+                        const maxFreq = 1760;
+                        const freq = minFreq + (maxFreq - minFreq) * (avg / 255);
+
+                        const L = this._getFrameSampleCount();
+                        const out = new Float32Array(L);
+                        if (!this._avgPhaseByStream) this._avgPhaseByStream = {};
+                        let phase = this._avgPhaseByStream[streamKey] || 0;
+                        const phaseInc = (2 * Math.PI * freq) / this.audioCtx.sampleRate;
+                        for (let i = 0; i < L; i++) {
+                            out[i] = Math.sin(phase) * 0.35;
+                            phase += phaseInc;
+                            if (phase > Math.PI * 2) phase -= Math.PI * 2;
+                        }
+                        this._avgPhaseByStream[streamKey] = phase;
+                        samples = out;
+                    }
                     break;
                 case 'white-noise-filtering': {
                     const w = this.canvas.width, h = this.canvas.height;
@@ -57,9 +79,16 @@ export class SonificationModes {
                             const idx = (y * w + x) * 4;
                             sum += (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
                         }
-                        cols[x] = (sum / h) / 127.5 - 1;
+                        cols[x] = Math.max(0, (sum / h) / 255);
                     }
-                    samples = this._samplesFromMinus1To1(cols);
+                    const L = this._getFrameSampleCount();
+                    const out = new Float32Array(L);
+                    for (let i = 0; i < L; i++) {
+                        const colIdx = Math.min(w - 1, Math.floor((i / L) * w));
+                        const amp = cols[colIdx] * 0.7;
+                        out[i] = (Math.random() * 2 - 1) * amp;
+                    }
+                    samples = out;
                     break;
                 }
                 case 'frame-audio-buffer':
@@ -338,13 +367,10 @@ export class SonificationModes {
         }
 
         _scaleSamples(samples, gain) {
-            if (!samples) return null;
-            const len = samples.length;
-            if (!len || len <= 0) return null;
+            if (!samples || !samples.length) return null;
             const g = Math.max(0, Math.min(1, gain));
-            if (g === 1) return Float32Array.from(samples);
-            const out = new Float32Array(len);
-            for (let i = 0; i < len; i++) out[i] = samples[i] * g;
+            const out = new Float32Array(samples.length);
+            for (let i = 0; i < samples.length; i++) out[i] = samples[i] * g;
             return out;
         }
 
@@ -424,10 +450,7 @@ export class SonificationModes {
         this.lastMode = null;
         this.lastModeByStream = {};
         this.streamTransitions = {};
-        this.singleTransition = null;
-        this.crossfadeGain = this.audioCtx.createGain();
-        this.crossfadeGain.gain.value = 1;
-        this.crossfadeGain.connect(this.outputNode);
+        this.activeTransition = null;
 
         // For multi-frame blend mode
         this.blendFrameCount = 5;
@@ -444,34 +467,33 @@ export class SonificationModes {
         this.crossfadeTimeMs = clamped;
         if (clamped <= 0) {
             this.streamTransitions = {};
-            this.singleTransition = null;
-        }
-    }
-
-    _fadeLegacyVoicesOut(durationSecs) {
-        const now = this.audioCtx.currentTime;
-        const end = now + Math.max(0.001, durationSecs);
-
-        const mainGain = this.gain && this.gain.gain;
-        if (mainGain) {
-            if (mainGain.cancelAndHoldAtTime) mainGain.cancelAndHoldAtTime(now);
-            else mainGain.cancelScheduledValues(now);
-            mainGain.setValueAtTime(mainGain.value, now);
-            mainGain.linearRampToValueAtTime(0, end);
-        }
-
-        for (let i = 0; i < this.bandGains.length; i++) {
-            const g = this.bandGains[i] && this.bandGains[i].gain;
-            if (!g) continue;
-            if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(now);
-            else g.cancelScheduledValues(now);
-            g.setValueAtTime(g.value, now);
-            g.linearRampToValueAtTime(0, end);
+            this.activeTransition = null;
         }
     }
 
     _getOutputNode() {
-        return this.crossfadeGain || this.outputNode || this.audioCtx.destination;
+        return this.outputNode || this.audioCtx.destination;
+    }
+
+    _beginSingleTransition(fromMode, toMode) {
+        const durationSecs = Math.max(0.001, this.crossfadeTimeMs / 1000);
+        const now = this.audioCtx.currentTime;
+        this.activeTransition = {
+            from: fromMode,
+            to: toMode,
+            startTime: now,
+            endTime: now + durationSecs,
+        };
+        // Reset live-mode generators so transitions are driven by the unified sample path.
+        this.stopAllBuffers();
+        if (this.gain && this.gain.gain) this.gain.gain.value = 0;
+        for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
+    }
+
+    _getTransitionProgress(transition) {
+        const total = Math.max(0.0001, transition.endTime - transition.startTime);
+        const elapsed = this.audioCtx.currentTime - transition.startTime;
+        return Math.max(0, Math.min(1, elapsed / total));
     }
 
     // ---------------- Frame-duration sample helpers ----------------
@@ -655,8 +677,13 @@ export class SonificationModes {
     }
 
     // Mode 1: Average Brightness to Pitch
-    avgBrightnessMode(data) {
-        this.stopAllBuffers();
+    avgBrightnessMode(data, options = {}) {
+        const preserveExisting = !!options.preserveExisting;
+        const gainScale = options.gainScale === undefined ? 1 : Math.max(0, Math.min(1, options.gainScale));
+
+        if (!preserveExisting) {
+            this.stopAllBuffers();
+        }
         let sum = 0;
         for (let i = 0; i < data.length; i += 4) {
             sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
@@ -665,17 +692,26 @@ export class SonificationModes {
         const minFreq = 220, maxFreq = 1760;
         const freq = minFreq + (maxFreq - minFreq) * (avg / 255);
         this.oscillator.frequency.value = freq;
-        this.gain.gain.value = 0.1;
-        for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
+        this.gain.gain.value = 0.1 * gainScale;
+        if (!preserveExisting) {
+            for (let i = 0; i < this.bandGains.length; i++) this.bandGains[i].gain.value = 0;
+        }
         // Don't stop noise - just mute the band gains instead
     }
 
     // Mode 2: White Noise Filtering
-    whiteNoiseFilteringMode(data) {
-        this.stopAllBuffers();
+    whiteNoiseFilteringMode(data, options = {}) {
+        const preserveExisting = !!options.preserveExisting;
+        const gainScale = options.gainScale === undefined ? 1 : Math.max(0, Math.min(1, options.gainScale));
+
+        if (!preserveExisting) {
+            this.stopAllBuffers();
+        }
         // Start noise if not already running
         this.audioManager.startNoise();
-        this.gain.gain.value = 0;
+        if (!preserveExisting) {
+            this.gain.gain.value = 0;
+        }
         for (let x = 0; x < this.canvas.width; x++) {
             let colSum = 0;
             for (let y = 0; y < this.canvas.height; y++) {
@@ -683,7 +719,7 @@ export class SonificationModes {
                 colSum += (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
             }
             const avg = colSum / this.canvas.height;
-            this.bandGains[x].gain.value = (avg / 255) * 0.2;
+            this.bandGains[x].gain.value = (avg / 255) * 0.2 * gainScale;
         }
     }
 
@@ -1309,6 +1345,20 @@ export class SonificationModes {
         this.lastFrameBufferSource = src;
     }
 
+    chrominance3FrameBufferMode(data, reverseOrder = false) {
+        this.stopAllBuffers();
+        const cycle = this._singleChromCycle || 0;
+        const ordered = reverseOrder ? [2, 1, 0] : [0, 1, 2];
+        const chan = ordered[cycle % 3];
+        this._singleChromCycle = (cycle + 1) % 3;
+
+        const samples = this._samplesChannel(data, chan);
+        const buffer = this._createBufferFromSamples(samples);
+        this.stopFrameBufferPlayback();
+        const src = this._scheduleOneShot(buffer, this._getOutputNode(), { duration: FRAME_DURATION });
+        this.lastFrameBufferSource = src;
+    }
+
     // Frame Difference Buffer (motion)
     frameDiffBufferMode(data) {
         this.stopAllBuffers();
@@ -1430,39 +1480,40 @@ export class SonificationModes {
 
     // Main method to process frame based on selected mode
     processFrame(data, mode) {
-        const now = this.audioCtx.currentTime;
-        if (this.crossfadeTimeMs > 0 && this.lastMode && this.lastMode !== mode) {
-            const duration = this.crossfadeTimeMs / 1000;
-            this.singleTransition = {
-                from: this.lastMode,
-                to: mode,
-                startTime: now,
-                endTime: now + duration
-            };
-
-            // Let old voices decay over the full crossfade instead of dropping immediately.
-            this._fadeLegacyVoicesOut(duration);
+        if (this.crossfadeTimeMs > 0 && this.lastMode && this.lastMode !== mode && !this.activeTransition) {
+            this._beginSingleTransition(this.lastMode, mode);
         }
         this.lastMode = mode;
 
-        if (this.singleTransition && this.singleTransition.to === mode) {
-            const total = Math.max(0.0001, this.singleTransition.endTime - this.singleTransition.startTime);
-            const progress = Math.max(0, Math.min(1, (now - this.singleTransition.startTime) / total));
+        if (this.activeTransition && this.activeTransition.to === mode) {
+            const progress = this._getTransitionProgress(this.activeTransition);
             if (progress < 1) {
-                const toSamples = this.getAudioBufferForMode(
+                const blended = this._buildCrossfadeSamples(
                     data,
-                    this.singleTransition.to,
-                    'single-main:to',
-                    { disableTransition: true }
+                    this.activeTransition.from,
+                    this.activeTransition.to,
+                    progress,
+                    'single-main'
                 );
-                const fadedIn = this._scaleSamples(toSamples, progress);
-                if (fadedIn) {
-                    this.playMixedBuffer(fadedIn);
+                if (blended) {
+                    this.playMixedBuffer(blended);
                     return;
                 }
             } else {
-                this.singleTransition = null;
+                this.activeTransition = null;
             }
+        }
+
+        // Unified single-stream steady-state path: render selected mode via sample synthesis.
+        const steadySamples = this.getAudioBufferForMode(
+            data,
+            mode,
+            'single-main:steady',
+            { disableTransition: true }
+        );
+        if (steadySamples) {
+            this.playMixedBuffer(steadySamples);
+            return;
         }
 
         switch (mode) {
@@ -1477,6 +1528,12 @@ export class SonificationModes {
                 break;
             case 'chrominance-buffer':
                 this.chrominanceBufferMode(data);
+                break;
+            case 'chrominance-3frame-buffer':
+                this.chrominance3FrameBufferMode(data, false);
+                break;
+            case 'chrominance-3frame-buffer-old':
+                this.chrominance3FrameBufferMode(data, true);
                 break;
             case 'frame-diff-buffer':
                 this.frameDiffBufferMode(data);
